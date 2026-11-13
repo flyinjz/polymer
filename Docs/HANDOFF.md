@@ -5,6 +5,10 @@ Current state of the work. Every session updates this before it ends.
 ## State (2026-11-13)
 
 - Design signed off: `Docs/DESIGN.md`. Nothing built yet.
+- All sessions run on the owner's Windows PC (see AGENTS.md).
+- CoreText reference images for text tuning: `Tests/Reference/Text`
+  (4 fonts, 8 sizes, 1x and 2x, dark and light; fonts in
+  `Tests/Fixtures/Fonts`, OFL licenses alongside).
 - Repo: `github.com/flyinjz/polymer`, public, plain git, signed commits.
 - i2s lives in a separate, encrypted repo (`flyinjz/meimei`, SwiftUI on the
   Mac, a Qt app on Windows that is now frozen). Its shared core (`Core/`:
@@ -21,7 +25,8 @@ Current state of the work. Every session updates this before it ends.
 3. `PolymerText`: OpenType parsing (TrueType and CFF outlines), the
    analytic-coverage rasteriser, Mac-style rendering (no hinting,
    fractional positioning, stem darkening, gamma-correct blending), and
-   the CoreText comparison check on the Mac (`Docs/DESIGN.md` §4).
+   a check comparing our output with the CoreText images in
+   `Tests/Reference/Text` (`Docs/DESIGN.md` §4).
    Text quality is a headline feature: get this excellent early.
 4. `PolymerRender` with a CPU reference renderer for headless images
    (identical on every OS), then `PolymerGPU` (Metal on Mac; D3D12 on
@@ -35,15 +40,19 @@ Current state of the work. Every session updates this before it ends.
    display refresh pacing (unlocked frame rate).
 8. The i2s Albums page on Polymer; then `PolymerAudio`.
 
-## Windows side
+## Windows side (where all sessions run)
 
-Open items for the Windows session (on the owner's Windows PC):
-- Clone this repo, install the Swift 6.2 toolchain for Windows, make
-  `swift build` and the checks pass, and report gaps in this file.
-- `PolymerPlatformWindows` (Win32 window, input, DPI and refresh rate,
-  glass via DWM), `PolymerGPUD3D12`, and the WASAPI output backend, once
-  the shared interfaces exist.
-- Compare headless images with the Mac's: they must be identical.
+- Set up: Swift 6.2 toolchain for Windows, `swift build` and the checks
+  passing; note any toolchain gaps here.
+- Shared modules in the order above, then `PolymerPlatformWindows` (Win32
+  window, input, per-monitor DPI and refresh rate, DWM glass),
+  `PolymerGPUD3D12`, and WASAPI output.
+
+## Mac side (for a later Mac session)
+
+- `PolymerPlatformMac`, `PolymerGPUMetal`, CoreAudio output.
+- Check that headless images match the Windows ones exactly.
+- Regenerate `Tests/Reference/Text` if fonts or cases change.
 
 ## Decisions log
 

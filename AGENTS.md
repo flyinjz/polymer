@@ -54,11 +54,18 @@ menus (from the command system) and Customize (style, scale, move, hide).
 
 ## Sessions and handoff
 
+- **Work runs on the owner's Windows PC.** Every session works there,
+  shared code included, and every session it starts stays there (start it
+  locally on that machine). Mac-only steps (the Mac backends, refreshing the
+  CoreText reference images) are listed in `Docs/HANDOFF.md` under "Mac
+  side" for a later Mac session.
 - Keep `Docs/HANDOFF.md` current: what is done, what is in progress,
-  decisions made, what comes next, and the Windows side's open items.
-- When your context gets high, update `Docs/HANDOFF.md`, then start a new
-  session with a short brief pointing at this file and the handoff, and
-  stop. Do not wait to be told.
-- Mac sessions build and test everything shared plus the Mac backends.
-  The Windows session (on the owner's Windows PC) owns the Win32, D3D12
-  and WASAPI backends and runs the Windows build and checks.
+  decisions made, what comes next.
+- When your context gets high, update `Docs/HANDOFF.md`, commit and push,
+  then start a new session on the same machine with a short brief pointing
+  at this file and the handoff, and stop. Do not wait to be told.
+- Text quality is tuned against the CoreText images in
+  `Tests/Reference/Text` (made on a Mac by
+  `Tools/Reference/coretext_reference.swift`; `manifest.json` gives font,
+  size, scale, colours, origin and baseline for each). Polymer's output
+  for the same inputs must match them closely on every OS.
