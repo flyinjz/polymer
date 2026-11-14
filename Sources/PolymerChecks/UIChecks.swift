@@ -216,6 +216,37 @@ struct ListScreen: View {
     }
 }
 
+// MARK: Views used by the pointer check
+
+/// Shows its state in text so a check can read it from the element tree.
+struct ProbeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Text(configuration.isPressed ? "down" : "up")
+        }
+    }
+}
+
+@Observable
+final class PointerModel {
+    var presses = 0
+    var hovering = false
+}
+
+struct PointerScreen: View {
+    let model: PointerModel
+    let font: Font
+    var body: some View {
+        VStack(alignment: .leading) {
+            Button("Go") { model.presses += 1 }.buttonStyle(ProbeButtonStyle())
+            Text(model.hovering ? "Hover on" : "Hover off").padding(8).onHover { model.hovering = $0 }
+        }
+        .font(font)
+        .frame(width: 200, height: 200, alignment: .topLeading)
+    }
+}
+
 // MARK: Views used by the focus check
 
 enum FocusField: Hashable { case name, notes }
@@ -543,6 +574,45 @@ struct BindingScreen: View {
         c.expect(tree.click(text: "Hide notes"), "the notes view is removed")
         c.expectEqual(tree.focusedElement, nil, "nothing has focus once the focused view is gone")
         c.expect(tree.elementTree.contains("\"Field none\""), "@FocusState is cleared with it")
+    },
+    Check("ui.pointer") { c in
+        let model = PointerModel()
+        let tree = ViewTree(PointerScreen(model: model, font: Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)))
+        let first = tree.elementTree
+        c.expect(first.contains("\"up\"") && !first.contains("StyledButtonBody"), "a styled button starts up, and the style's own view stays out of the tree:\n\(first)")
+        guard let go = tree.point(ofText: "Go") else { c.fail("the button is missing"); return }
+        let far = Point(x: 190, y: 190)
+
+        // Pressed while held over the button; the action runs on release over it.
+        let before = tree.bodyEvaluations
+        tree.pointerDown(at: go)
+        c.expect(tree.elementTree.contains("\"down\""), "the style sees the button pressed")
+        c.expectEqual(tree.bodyEvaluations - before, 1, "pressing evaluates only the style's body")
+        c.expectEqual(model.presses, 0, "nothing runs on the way down")
+        tree.pointerMoved(to: far)
+        c.expect(tree.elementTree.contains("\"up\""), "moving off the held button shows it up")
+        tree.pointerMoved(to: go)
+        c.expect(tree.elementTree.contains("\"down\""), "moving back shows it pressed again")
+        c.expect(tree.pointerUp(at: go), "releasing over the button runs it")
+        c.expectEqual(model.presses, 1, "one press")
+        c.expect(tree.elementTree.contains("\"up\""), "released")
+        tree.pointerDown(at: go)
+        c.expect(!tree.pointerUp(at: far), "releasing elsewhere runs nothing")
+        c.expectEqual(model.presses, 1, "still one press")
+        c.expect(tree.click(text: "Go"), "a click presses a styled button")
+        c.expect(tree.key("tab") && tree.key("space"), "a styled button works from the keyboard")
+        c.expectEqual(model.presses, 3, "presses from click and keyboard")
+
+        // Hover.
+        guard let hover = tree.point(ofText: "Hover off") else { c.fail("the hover text is missing"); return }
+        tree.pointerMoved(to: Point(x: hover.x, y: hover.y - 7))
+        c.expect(model.hovering, "entering the view's frame (its padding included) starts hover")
+        c.expect(tree.elementTree.contains("\"Hover on\""), "the screen shows it")
+        tree.pointerMoved(to: far)
+        c.expect(!model.hovering, "leaving ends hover")
+        tree.pointerMoved(to: hover)
+        tree.pointerExited()
+        c.expect(!model.hovering, "the pointer leaving the window ends hover")
     },
     Check("ui.text-wrapping") { c in
         let face = try TextReference.font(root: c.root, "Geist-Regular.otf")

@@ -1,8 +1,10 @@
 // Things a pointer can act on: Button and tap handlers.
 import PolymerBase
 
-/// Runs `action` when clicked. Unstyled for now: it looks like its label
-/// (button styles come with PolymerDesign). The whole label area is clickable.
+/// Runs `action` when clicked: pressed and released over it, or Space or
+/// Return while it has focus. Its look comes from the `ButtonStyle` in the
+/// environment (`.buttonStyle(_:)`); the default draws the label as it is.
+/// The whole label area is clickable.
 public struct Button<Label: View>: View, PrimitiveView {
     let action: @MainActor () -> Void
     let label: Label
@@ -15,7 +17,17 @@ public struct Button<Label: View>: View, PrimitiveView {
         let reuse = (existing as? TapNode).flatMap { $0.isButton ? $0 : nil }
         let n = reuse ?? TapNode(isButton: true)
         n.action = action
-        n.setChild(0, label, c)
+        let style = c.environment.buttonStyle
+        if style is PlainButtonStyle {
+            n.setChild(0, label, c)
+        } else {
+            func styled<S: ButtonStyle>(_ s: S) {
+                let label = label
+                let l = ButtonStyleConfiguration.Label { existing, c in reconcile(label, existing, c) }
+                n.setChild(0, StyledButtonBody(style: s, label: l, pressed: n.pressed), c)
+            }
+            styled(style)
+        }
         return n
     }
 }
@@ -48,6 +60,8 @@ struct TapView<Content: View>: View, PrimitiveView {
 final class TapNode: PassthroughNode {
     let isButton: Bool
     var action: (@MainActor () -> Void)?
+    /// Whether the pointer is holding the button down; button styles read it as `isPressed`.
+    let pressed = StateStorage(false)
     init(isButton: Bool) { self.isButton = isButton; super.init() }
 
     override var role: String { "Button" }

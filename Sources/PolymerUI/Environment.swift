@@ -37,6 +37,8 @@ public struct EnvironmentValues {
     /// Most lines a `Text` may take; nil for as many as it needs.
     public var lineLimit: Int?
     public var multilineTextAlignment: TextAlignment = .leading
+    /// The look of buttons; set with `.buttonStyle(_:)`.
+    public var buttonStyle: any ButtonStyle = PlainButtonStyle()
 
     private var custom: [ObjectIdentifier: Any] = [:]
 

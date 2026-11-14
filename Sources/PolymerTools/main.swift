@@ -17,9 +17,9 @@ let usage = """
 
     Commands:
       check [filter] [--list] [--verbose]    Run the headless checks (all, or names containing filter).
-      render <screen> <out.png> [--scale N] [--click "text"] [--scroll N] [--key K]...
+      render <screen> <out.png> [--scale N] [--click "text"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
                                              Render a screen to a PNG, headless.
-      tree <screen> [--click "text"] [--scroll N] [--key K]...
+      tree <screen> [--click "text"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
                                              Print a screen's element tree (role, frame, details).
       zoom <in> <out> x y w h factor         Crop a PNG and enlarge it, for inspecting pixels.
       help                                   Show this text.
@@ -28,6 +28,7 @@ let usage = """
     --click presses the button or tap handler under the text that reads exactly "text";
     --scroll moves the scroll view in the middle of the screen down by N points (up when negative).
     --key presses a key: "tab", "shift+tab", "space", "return", "down", "cmd+a", "x".
+    --hover moves the pointer over the text; --press holds the pointer down on it (to see pressed looks).
     Steps are applied in the order given, before the screen is rendered or printed.
 
     Run from the repository root (the folder with Package.swift).
@@ -38,11 +39,11 @@ Logger.sink = { level, category, message in
 }
 
 // Arguments: options that take a value are listed here; everything else starting with "--" is a flag.
-let valueOptions: Set<String> = ["--scale", "--click", "--scroll", "--key"]
+let valueOptions: Set<String> = ["--scale", "--click", "--scroll", "--key", "--hover", "--press"]
 var positionals: [String] = []
 var flags: Set<String> = []
 var values: [String: [String]] = [:]
-/// --click, --scroll and --key in the order given.
+/// The input steps (--click, --scroll, --key, --hover, --press) in the order given.
 var steps: [(option: String, value: String)] = []
 do {
     let args = Array(Platform.process.arguments.dropFirst())
@@ -56,7 +57,7 @@ do {
                 Platform.process.exit(2)
             }
             values[a, default: []].append(args[i + 1])
-            if a == "--click" || a == "--scroll" || a == "--key" { steps.append((a, args[i + 1])) }
+            if a != "--scale" { steps.append((a, args[i + 1])) }
             i += 2
         } else if a.hasPrefix("--") {
             flags.insert(a); i += 1

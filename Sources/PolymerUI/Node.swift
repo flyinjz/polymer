@@ -177,6 +177,9 @@ class Node {
     /// Handles a key press that reached this node; `.ignored` passes it to the parent.
     func handle(_ press: KeyPress) -> KeyPress.Result { .ignored }
 
+    /// True for nodes that cut their content to their frame (scroll views, `.clipped()`).
+    var clipsContent: Bool { false }
+
     /// True for nodes that draw something a pointer can land on.
     var isHitTarget: Bool { false }
     /// Run when the node, or anything inside it, is clicked.

@@ -13,6 +13,10 @@ public final class ViewTree {
     private var resolveRoot: (Node?, ResolveContext) -> Node
     private var needsResolve = true
     private var needsLayout = true
+    /// Where the pointer is (screen points), nil when outside.
+    private var pointer: Point?
+    /// The button or tap handler the pointer went down on.
+    private weak var pressedNode: Node?
 
     /// Environment of the root view. `displayScale` is the pixels per point images are drawn at.
     public var environment: EnvironmentValues { didSet { needsResolve = true } }
@@ -124,28 +128,80 @@ public final class ViewTree {
 
     // MARK: Input
 
-    /// Clicks at a point (points from the top-left). A focusable view under
-    /// the point takes focus (buttons do not, as on macOS). Returns true when
-    /// a button or tap handler ran or focus moved.
+    /// Clicks at a point (points from the top-left): the pointer moves there,
+    /// goes down and comes up. Returns true when a button or tap handler ran
+    /// or focus moved.
     @discardableResult
     public func click(at point: Point) -> Bool {
+        pointerMoved(to: point)
+        let focusMoved = pointerDown(at: point)
+        return pointerUp(at: point) || focusMoved
+    }
+
+    /// The pointer moved to `point` (points from the top-left). Updates
+    /// hover handlers, and whether a held button shows as pressed.
+    public func pointerMoved(to point: Point) {
         update()
+        pointer = point
+        if let b = pressedNode as? TapNode, b.isButton { setPressed(b, b.isUnderPointer(point)) }
+        state.updateHover(point)
+    }
+
+    /// The pointer left the window: hover handlers are told it is gone.
+    public func pointerExited() {
+        pointer = nil
+        state.updateHover(nil)
+    }
+
+    /// The pointer went down at `point`. A focusable view under it takes
+    /// focus (buttons do not, as on macOS); a button under it shows as
+    /// pressed. Returns true when focus moved.
+    @discardableResult
+    public func pointerDown(at point: Point) -> Bool {
+        if pointer != point { pointerMoved(to: point) }
         let hit = root?.hitTest(point)
-        var focusedNow = false
+        var focusMoved = false
         var n = hit
         while let node = n {
             if node.focusesOnClick {
-                if state.focused !== node { state.setFocus(node); focusedNow = true }
+                if state.focused !== node { state.setFocus(node); focusMoved = true }
                 break
             }
             n = node.parent
         }
         n = hit
+        pressedNode = nil
         while let node = n {
-            if let action = node.tapAction { action(); return true }
+            if node.tapAction != nil { pressedNode = node; break }
             n = node.parent
         }
-        return focusedNow
+        if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
+        return focusMoved
+    }
+
+    /// The pointer came up at `point`. The button or tap handler it went
+    /// down on runs if the pointer is still over it. Returns true when one ran.
+    @discardableResult
+    public func pointerUp(at point: Point) -> Bool {
+        if pointer != point { pointerMoved(to: point) }
+        guard let node = pressedNode else { return false }
+        pressedNode = nil
+        let b = node as? TapNode
+        if let b, b.isButton { setPressed(b, false) }
+        // A button counts its whole label area; a tap handler only what it draws.
+        let over: Bool
+        if let b, b.isButton { over = b.isUnderPointer(point) } else {
+            var h = root?.hitTest(point)
+            while let x = h, x !== node { h = x.parent }
+            over = h != nil
+        }
+        guard over, node.isMounted, let action = node.tapAction else { return false }
+        action()
+        return true
+    }
+
+    private func setPressed(_ b: TapNode, _ down: Bool) {
+        if b.pressed.peek != down { b.pressed.value = down }
     }
 
     // MARK: Keyboard
@@ -211,10 +267,16 @@ public final class ViewTree {
     /// Returns false when there is no such text or nothing handles the click.
     @discardableResult
     public func click(text: String) -> Bool {
+        guard let p = point(ofText: text) else { return false }
+        return click(at: p)
+    }
+
+    /// The middle of the first text that reads exactly `text`, in screen points; nil when there is none.
+    public func point(ofText text: String) -> Point? {
         update()
-        guard let node = root?.first(where: { ($0 as? TextNode)?.string == text }) else { return false }
+        guard let node = root?.first(where: { ($0 as? TextNode)?.string == text }) else { return nil }
         let f = node.screenFrame
-        return click(at: Point(x: f.midX, y: f.midY))
+        return Point(x: f.midX, y: f.midY)
     }
 
     /// Scrolls the scroll view under `point` by (dx, dy) points: positive dy
@@ -227,7 +289,11 @@ public final class ViewTree {
         update()
         var n = root?.hitTest(point)
         while let node = n {
-            if let s = node as? ScrollNode, s.scroll(dx: dx, dy: dy) { return true }
+            if let s = node as? ScrollNode, s.scroll(dx: dx, dy: dy) {
+                // Content moved under the pointer.
+                if pointer != nil, !state.hoverNodes.isEmpty { update(); state.updateHover(pointer) }
+                return true
+            }
             n = node.parent
         }
         return false

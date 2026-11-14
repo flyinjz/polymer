@@ -188,6 +188,7 @@ struct ClipView<Content: View>: View, PrimitiveView {
 }
 
 final class ClipNode: Node {
+    override var clipsContent: Bool { true }
     override var isElement: Bool { false }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r) }

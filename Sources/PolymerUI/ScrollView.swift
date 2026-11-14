@@ -51,6 +51,7 @@ final class ScrollNode: Node {
     }
 
     override var role: String { "ScrollView" }
+    override var clipsContent: Bool { true }
     override var detail: String {
         func n(_ v: Double) -> String { v == v.rounded() ? String(Int(v)) : String(v) }
         return "content \(n(contentSize.width))x\(n(contentSize.height)) offset \(n(offset.x)),\(n(offset.y))"

@@ -207,6 +207,8 @@ final class TreeState {
     weak var focused: Node?
     /// Views with `.focused(...)`, in the order they first appeared.
     var focusBindings: [WeakFocusBinding] = []
+    /// Views with `.onHover`.
+    var hoverNodes: [WeakHoverNode] = []
 }
 
 // MARK: Hosts
@@ -255,7 +257,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
     }
 
     override var role: String { name }
-    override var isElement: Bool { true }
+    override var isElement: Bool { !(V.self is HiddenFromElementTree.Type) }
 
     /// Called when the parent hands down a new value of the view.
     func update(_ view: V, _ c: ResolveContext) {

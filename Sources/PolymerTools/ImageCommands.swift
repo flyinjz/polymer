@@ -36,6 +36,12 @@ func screenTree(_ name: String, scale: Double, steps: [(option: String, value: S
                 print("--click \"\(step.value)\": no visible, clickable text reads exactly that. `polymer tree \(name)` lists the texts on the screen; scroll first if it is outside its scroll view.")
                 Platform.process.exit(1)
             }
+        } else if step.option == "--hover" || step.option == "--press" {
+            guard let p = tree.point(ofText: step.value) else {
+                print("\(step.option) \"\(step.value)\": no visible text reads exactly that. `polymer tree \(name)` lists the texts on the screen.")
+                Platform.process.exit(1)
+            }
+            if step.option == "--hover" { tree.pointerMoved(to: p) } else { tree.pointerDown(at: p) }
         } else if step.option == "--key" {
             guard KeyPress(step.value) != nil else {
                 print("--key \"\(step.value)\" is not a key. Use a character or tab, space, return, escape, delete, up, down, left, right, home, end, pageup, pagedown; add shift+, ctrl+, alt+ or cmd+ in front.")

@@ -13,7 +13,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (22 checks: base, text, render, ui).
+  passes (23 checks: base, text, render, ui).
 
 ### Done
 
@@ -64,6 +64,9 @@ Current state of the work. Every session updates this before it ends.
     `.focused($b)` and `.focused($v, equals:)`, `.onKeyPress(...)`,
     `KeyEquivalent`, `EventModifiers`, `KeyPress`; `ViewTree.key(_:)`,
     `focusedElement`; see "How focus works" below.
+  - Pointer (session 3): `ViewTree.pointerMoved/Down/Up/Exited`; buttons
+    run on release over them; `ButtonStyle` with `isPressed` and
+    `.buttonStyle(_:)` (`PlainButtonStyle` is the default); `.onHover`.
   - Modifiers: `padding`, `frame` (fixed and flexible), `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -78,8 +81,8 @@ Current state of the work. Every session updates this before it ends.
     window uses to schedule a frame; `bodyEvaluations` counts work for
     checks.
   - `ImageRenderer` (SwiftUI's name) for one-shot images and trees.
-  - Not yet: scroll bars, animation, hover and pressed states, element
-    names, a focus ring (a PolymerDesign look), scrolling the focused view
+  - Not yet: scroll bars, animation, element names, pressed looks for
+    tap gestures, a focus ring (a PolymerDesign look), scrolling the focused view
     into view.
 - `polymer` command: `check [filter] [--list] [--verbose]`,
   `render <screen> <out.png> [--scale N] [--click "text"] [--scroll N]...`,
@@ -218,6 +221,29 @@ Read this before changing `LazyStacks.swift`.
 - Every node now has `isMounted` (false after `unmount`).
 - Check: `ui.focus`.
 
+### How pointer states work (session 3)
+
+- `click(at:)` is `pointerMoved` + `pointerDown` + `pointerUp`. Down
+  focuses a `focusesOnClick` view and remembers the nearest node with a
+  tap action (`pressedNode`). Up runs it only if the pointer is still
+  over it: a button's whole label area (`isUnderPointer`, which also
+  respects enclosing scroll views and `.clipped()` via `clipsContent`),
+  a tap handler only where something is drawn.
+- **Button styles.** `TapNode.pressed` is a `StateStorage<Bool>`. With the
+  default `PlainButtonStyle` the label is the button's child directly
+  (no extra node). Any other style puts a `StyledButtonBody<S>` (a view
+  with a body, hidden from the element tree) between them; it reads
+  `pressed`, so pressing re-evaluates only that body. The label reaches
+  the style as `ButtonStyleConfiguration.Label`, a primitive view that
+  reconciles the original label.
+- **Hover.** `.onHover` makes a `HoverNode` registered with the tree.
+  `TreeState.updateHover` runs on every pointer move, on `pointerExited`,
+  and after a scroll moves content under the pointer: exits first, then
+  enters. Its area is the view's frame (padding included).
+- Known limits: a style's own `@Environment` or `@State` properties are
+  not linked yet; hover is not recomputed when layout alone moves views.
+- Check: `ui.pointer`.
+
 ### Text: how close to CoreText
 
 `polymer check text.coretext` renders all 128 reference cases and writes
@@ -292,8 +318,7 @@ side) to confirm the luminance rule between the two measured colours.
    identity, layout, text wrapping, buttons and clicks~~ done; next:
    ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
    and scroll physics, element names (stable paths for
-   Customize and for driving input), hover and pressed states, a focus
-   ring, animation, skipping bodies of unchanged `Equatable`
+   Customize and for driving input), a focus ring, animation, skipping bodies of unchanged `Equatable`
    views, text cut to the height it is given.
 6. `PolymerDesign`: tokens, components, Customize and right-click menus.
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
@@ -318,7 +343,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (22 checks) as of Windows session 3.
+  in debug. Both pass (23 checks) as of Windows session 3.
 
 ## Mac side (for a later Mac session)
 
@@ -383,8 +408,9 @@ side) to confirm the luminance rule between the two measured colours.
   physical pixels; say if "1px lines" should mean 1 physical pixel.
 - Text frames are rounded up to whole pixels and baselines snapped to the
   pixel grid vertically (glyph positions stay fractional horizontally).
-- `Button` has no look of its own yet (it draws its label); button styles
-  belong to PolymerDesign.
+- `Button` has no look of its own yet (it draws its label). Styles can
+  now be written with `ButtonStyle` and `isPressed`; the house style
+  belongs to PolymerDesign.
 - Keyboard focus has no visible ring yet. Buttons take focus from Tab
   (as with macOS full keyboard access, and on Windows) but not from a
   click. The ring's look is a PolymerDesign decision.
