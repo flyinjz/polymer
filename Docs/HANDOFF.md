@@ -6,12 +6,12 @@ Current state of the work. Every session updates this before it ends.
 
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
   `Docs/DIFFERENCES.md`.
-- **Not committed yet:** GPG signing needs the owner's cached passphrase
-  (`gpg: signing failed: No pinentry`). All work below is in the working
-  tree at `C:\Users\pgr\polymer`. Once the owner unlocks the key (any
-  signed commit or `echo x | gpg --clearsign` on this PC), commit in small
-  steps and push. Test without opening a prompt:
+- Sessions 1 to 3 are committed (2026-11-14), not pushed until the owner
+  says so. Signing needs the owner's passphrase cached on this PC; test
+  without opening a prompt:
   `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
+  If it fails, ask the owner to run (PowerShell)
+  `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
   passes (22 checks: base, text, render, ui).
 
