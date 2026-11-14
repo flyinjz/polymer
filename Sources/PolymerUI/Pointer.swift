@@ -43,8 +43,9 @@ extension View {
 protocol HiddenFromElementTree {}
 
 /// The body of a styled button: re-evaluated when `pressed` changes.
-struct StyledButtonBody<S: ButtonStyle>: View, HiddenFromElementTree {
+struct StyledButtonBody<S: ButtonStyle>: View, HiddenFromElementTree, LinksNestedProperties {
     let style: S
+    var nestedProperties: Any { style }
     let label: ButtonStyleConfiguration.Label
     let pressed: StateStorage<Bool>
     var body: some View { style.makeBody(configuration: ButtonStyleConfiguration(label: label, isPressed: pressed.value)) }

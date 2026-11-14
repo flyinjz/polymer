@@ -247,6 +247,40 @@ struct PointerScreen: View {
     }
 }
 
+// MARK: Views used by the disabled check
+
+/// Reads `isEnabled` from the environment, as SwiftUI styles do.
+struct EnabledProbeStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Text(isEnabled ? "enabled" : "disabled")
+        }
+    }
+}
+
+@Observable
+final class DisabledModel {
+    var locked = false
+    var saves = 0
+    var outerTaps = 0
+}
+
+struct DisabledScreen: View {
+    let model: DisabledModel
+    let font: Font
+    var body: some View {
+        VStack(alignment: .leading) {
+            Button("Save") { model.saves += 1 }.buttonStyle(EnabledProbeStyle()).disabled(model.locked)
+            Button("Other") {}
+        }
+        .padding(8)
+        .onTapGesture { model.outerTaps += 1 }
+        .font(font)
+    }
+}
+
 // MARK: Views used by the focus check
 
 enum FocusField: Hashable { case name, notes }
@@ -613,6 +647,26 @@ struct BindingScreen: View {
         tree.pointerMoved(to: hover)
         tree.pointerExited()
         c.expect(!model.hovering, "the pointer leaving the window ends hover")
+    },
+    Check("ui.disabled") { c in
+        let model = DisabledModel()
+        let tree = ViewTree(DisabledScreen(model: model, font: Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)))
+        c.expect(tree.elementTree.contains("\"enabled\""), "a style reads isEnabled from the environment")
+        c.expect(tree.click(text: "Save"), "an enabled button runs")
+        c.expect(tree.key("tab"), "Tab focuses it")
+        model.locked = true
+        let t = tree.elementTree
+        c.expect(t.contains("\"disabled\"") && t.contains(") disabled"), "the style and the element tree show it disabled:\n\(t)")
+        c.expectEqual(tree.focusedElement, nil, "a button that becomes disabled gives up focus")
+        c.expect(!tree.click(text: "Save"), "a disabled button does not run")
+        c.expectEqual(model.saves, 1, "one save")
+        c.expectEqual(model.outerTaps, 0, "the press does not pass to the tap handler around it")
+        c.expect(tree.key("tab"), "Tab moves on")
+        c.expect(tree.focusedElement?.contains("\"Other\"") == true, "Tab skips the disabled button: \(tree.focusedElement ?? "nothing")")
+        model.locked = false
+        c.expect(tree.elementTree.contains("\"enabled\""), "enabled again")
+        c.expect(tree.click(text: "Save"), "and it runs")
+        c.expectEqual(model.saves, 2, "two saves")
     },
     Check("ui.text-wrapping") { c in
         let face = try TextReference.font(root: c.root, "Geist-Regular.otf")

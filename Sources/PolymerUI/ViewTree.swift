@@ -172,6 +172,8 @@ public final class ViewTree {
         n = hit
         pressedNode = nil
         while let node = n {
+            // A disabled button swallows the press rather than passing it outward.
+            if let t = node as? TapNode, t.isButton, !t.isEnabled { break }
             if node.tapAction != nil { pressedNode = node; break }
             n = node.parent
         }

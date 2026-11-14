@@ -39,6 +39,8 @@ public struct EnvironmentValues {
     public var multilineTextAlignment: TextAlignment = .leading
     /// The look of buttons; set with `.buttonStyle(_:)`.
     public var buttonStyle: any ButtonStyle = PlainButtonStyle()
+    /// False inside `.disabled(true)`: buttons, tap handlers and focusable views stop responding.
+    public var isEnabled = true
 
     private var custom: [ObjectIdentifier: Any] = [:]
 
@@ -73,6 +75,11 @@ extension View {
     }
     public func multilineTextAlignment(_ alignment: TextAlignment) -> some View {
         EnvironmentModifier(content: self) { $0.multilineTextAlignment = alignment }
+    }
+    /// Turns off buttons, tap handlers and focus in this view and everything inside it.
+    /// `.disabled(false)` does not turn back on what an outer `.disabled(true)` turned off.
+    public func disabled(_ disabled: Bool) -> some View {
+        EnvironmentModifier(content: self) { if disabled { $0.isEnabled = false } }
     }
     /// Sets one environment value for this view and everything inside it.
     public func environment<V>(_ keyPath: WritableKeyPath<EnvironmentValues, V>, _ value: V) -> some View {

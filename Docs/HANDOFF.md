@@ -13,7 +13,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (23 checks: base, text, render, ui).
+  passes (24 checks: base, text, render, ui).
 
 ### Done
 
@@ -67,6 +67,10 @@ Current state of the work. Every session updates this before it ends.
   - Pointer (session 3): `ViewTree.pointerMoved/Down/Up/Exited`; buttons
     run on release over them; `ButtonStyle` with `isPressed` and
     `.buttonStyle(_:)` (`PlainButtonStyle` is the default); `.onHover`.
+  - `.disabled(_:)` and `.isEnabled` (session 3): disabled buttons and tap
+    handlers do nothing and swallow the press, leave the Tab order, give up
+    focus, and show "disabled" in the element tree. Button styles can use
+    `@Environment` and `@State` (`LinksNestedProperties`).
   - Modifiers: `padding`, `frame` (fixed and flexible), `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -240,8 +244,9 @@ Read this before changing `LazyStacks.swift`.
   `TreeState.updateHover` runs on every pointer move, on `pointerExited`,
   and after a scroll moves content under the pointer: exits first, then
   enters. Its area is the view's frame (padding included).
-- Known limits: a style's own `@Environment` or `@State` properties are
-  not linked yet; hover is not recomputed when layout alone moves views.
+- A style's `@Environment` and `@State` are linked through the body that
+  draws it (`StyledButtonBody` conforms to `LinksNestedProperties`).
+- Known limit: hover is not recomputed when layout alone moves views.
 - Check: `ui.pointer`.
 
 ### Text: how close to CoreText
@@ -343,7 +348,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (23 checks) as of Windows session 3.
+  in debug. Both pass (24 checks) as of Windows session 3.
 
 ## Mac side (for a later Mac session)
 

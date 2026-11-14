@@ -224,6 +224,19 @@ protocol ViewHost: AnyObject {
 }
 
 /// Whether views of each type have properties to link, so views without any skip the search.
+/// Views that hold another value whose `@State` and `@Environment` are
+/// linked too (a button style, inside the view that draws it).
+@MainActor protocol LinksNestedProperties { var nestedProperties: Any { get } }
+
+/// The properties of `view` to link: its own, then those of the value it nests.
+@MainActor func linkedProperties(_ view: Any) -> [LinkedProperty] {
+    var out = Mirror(reflecting: view).children.compactMap { $0.value as? LinkedProperty }
+    if let n = view as? LinksNestedProperties {
+        out += Mirror(reflecting: n.nestedProperties).children.compactMap { $0.value as? LinkedProperty }
+    }
+    return out
+}
+
 @MainActor private var linkedViewTypes: [ObjectIdentifier: Bool] = [:]
 
 /// The node of a view with a body. Keeps the view's state and its
@@ -249,7 +262,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         name = String(full.prefix { $0 != "<" })
         let type = ObjectIdentifier(V.self)
         if let known = linkedViewTypes[type] { linked = known } else {
-            linked = Mirror(reflecting: view).children.contains { $0.value is LinkedProperty }
+            linked = !linkedProperties(view).isEmpty
             linkedViewTypes[type] = linked
         }
         super.init()
@@ -278,7 +291,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         epoch.bump()
         if linked {
             var linker = PropertyLinker(storages: storages, environment: context.environment)
-            for child in Mirror(reflecting: view).children { (child.value as? LinkedProperty)?.link(&linker) }
+            for p in linkedProperties(view) { p.link(&linker) }
             storages = linker.storages
         }
         var inner = context

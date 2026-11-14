@@ -174,7 +174,7 @@ struct FocusableView<Content: View>: View, PrimitiveView {
     let content: Content, isFocusable: Bool
     func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
         let n = (existing as? FocusableNode) ?? FocusableNode()
-        n.isFocusable = isFocusable
+        n.isFocusable = isFocusable && c.environment.isEnabled
         n.setChild(0, content, c)
         return n
     }
@@ -262,7 +262,8 @@ extension TreeState {
     /// them, and drops focus from a view that left the tree. Returns true
     /// when focus moved or a binding was written (views need evaluating).
     func syncFocus(root: Node?) -> Bool {
-        if let f = focused, !f.isMounted || !isInside(f, root) { setFocus(nil); return true }
+        // Gone from the tree, or no longer focusable (disabled).
+        if let f = focused, !f.isMounted || !f.acceptsFocus || !isInside(f, root) { setFocus(nil); return true }
         var wrote = pruneBindings()
         let all = focusBindings.compactMap(\.node)
         // A binding set to its view: focus the first focusable view there.

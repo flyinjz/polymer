@@ -17,6 +17,7 @@ public struct Button<Label: View>: View, PrimitiveView {
         let reuse = (existing as? TapNode).flatMap { $0.isButton ? $0 : nil }
         let n = reuse ?? TapNode(isButton: true)
         n.action = action
+        n.isEnabled = c.environment.isEnabled
         let style = c.environment.buttonStyle
         if style is PlainButtonStyle {
             n.setChild(0, label, c)
@@ -52,6 +53,7 @@ struct TapView<Content: View>: View, PrimitiveView {
         let reuse = (existing as? TapNode).flatMap { $0.isButton ? nil : $0 }
         let n = reuse ?? TapNode(isButton: false)
         n.action = action
+        n.isEnabled = c.environment.isEnabled
         n.setChild(0, content, c)
         return n
     }
@@ -66,12 +68,14 @@ final class TapNode: PassthroughNode {
 
     override var role: String { "Button" }
     override var isElement: Bool { isButton }
-    override var tapAction: (@MainActor () -> Void)? { action }
-    override var acceptsFocus: Bool { isButton }
+    var isEnabled = true
+    override var detail: String { isButton && !isEnabled ? "disabled" : "" }
+    override var tapAction: (@MainActor () -> Void)? { isEnabled ? action : nil }
+    override var acceptsFocus: Bool { isButton && isEnabled }
 
     /// Space and Return press a focused button.
     override func handle(_ press: KeyPress) -> KeyPress.Result {
-        guard isButton, press.phase == .down, press.modifiers.isEmpty,
+        guard isButton, isEnabled, press.phase == .down, press.modifiers.isEmpty,
               press.key == .space || press.key == .return, let action else { return .ignored }
         action()
         return .handled
