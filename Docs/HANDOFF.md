@@ -2,60 +2,398 @@
 
 Current state of the work. Every session updates this before it ends.
 
-## State (2026-11-13)
+## State (2026-11-14, Windows session 3)
 
-- Design signed off: `Docs/DESIGN.md`. Nothing built yet.
-- All sessions run on the owner's Windows PC (see AGENTS.md).
-- CoreText reference images for text tuning: `Tests/Reference/Text`
-  (4 fonts, 8 sizes, 1x and 2x, dark and light; fonts in
-  `Tests/Fixtures/Fonts`, OFL licenses alongside).
-- Repo: `github.com/flyinjz/polymer`, public, plain git, signed commits.
-- i2s lives in a separate, encrypted repo (`flyinjz/meimei`, SwiftUI on the
-  Mac, a Qt app on Windows that is now frozen). Its shared core (`Core/`:
-  library rules, history, equalizer maths, lyrics, Customize state) moves
-  onto Polymer's base later as `I2SCore`. Polymer itself must not depend on
-  i2s.
+- Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
+  `Docs/DIFFERENCES.md`.
+- **Not committed yet:** GPG signing needs the owner's cached passphrase
+  (`gpg: signing failed: No pinentry`). All work below is in the working
+  tree at `C:\Users\pgr\polymer`. Once the owner unlocks the key (any
+  signed commit or `echo x | gpg --clearsign` on this PC), commit in small
+  steps and push. Test without opening a prompt:
+  `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
+- Builds with `swift build` (debug and release) on Windows; `polymer check`
+  passes (22 checks: base, text, render, ui).
+
+### Done
+
+- `Package.swift`: modules `PolymerBase`, `PolymerPlatform` (+ `…Windows`,
+  `…Mac` backends), `PolymerText`, `PolymerRender`, `PolymerUI`, `Polymer`
+  (umbrella), `PolymerChecks`, and the `polymer` command (`PolymerTools`).
+  Modules are added as they get real code. macOS floor is 15 (see
+  "For the owner's review").
+- `PolymerBase`: geometry (`Point`, `Size`, `Rect`, `EdgeInsets`,
+  `PixelRect`, `AffineTransform`), `Path` with flattening, `Color` with
+  exact sRGB transfer and pure-Swift `Math.log/exp` (identical on every
+  OS), `StableID`/`StableHasher` (FNV-1a + splitmix, pinned value in a
+  check), `Logger`, `ByteReader`, `JSON` (strict parser with line/column
+  errors, deterministic output), zlib inflate/deflate, CRC-32, Adler-32.
+- `PolymerPlatform`: `FileSystem` and `Process` interfaces, installed by the
+  entry point; Windows backend (Win32, UTF-16 paths) and Mac backend
+  (POSIX; written but **not yet compiled on a Mac**).
+- `PolymerText`:
+  - OpenType parser (`FontFace`): table directory and collections, cmap
+    4/12, hmtx, `glyf` (simple and composite), CFF with a Type 2
+    charstring interpreter (subroutines, flex, CID fonts).
+  - Kerning: GPOS pair kerning (formats 1 and 2, extension lookups) with
+    legacy `kern` fallback.
+  - Substitution (`Substitution.swift`): GSUB single, multiple, ligature,
+    context and chaining-context lookups (formats 1 to 3), extension
+    lookups; the default features `ccmp locl rlig liga clig calt rclt`.
+  - Rasteriser: analytic coverage (signed-area accumulation, curves
+    flattened to 0.01 px), outline emboldening.
+  - Layout: `TextLayout.line` (shaping, advances, kerning) and
+    `TextLayout.lines` (wrapping at spaces and hyphens, explicit line
+    breaks, long words broken between characters, `lineLimit` with an
+    ellipsis).
+  - `GlyphCache`: outlines and coverage masks kept between draws, keyed by
+    the exact fractional pixel offset (same pixels cached or not).
+- `PolymerRender`: `Bitmap`, PNG decode/encode (our own), `Canvas` (CPU
+  reference renderer: rects, paths, glyph runs, rectangular clipping).
+- `PolymerUI`:
+  - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
+    if/else, optionals), `Group`, `ForEach` (by `id:` key path,
+    `Identifiable`, or an index range), `.id(_:)`.
+  - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`),
+    `Color`, `Rectangle`, `Spacer`, `Divider`, `HStack`, `VStack`,
+    `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both).
+  - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
+    lays out and draws only the elements in view; see "How lazy stacks
+    work" below.
+  - Keyboard and focus (session 3): `.focusable()`, `@FocusState` with
+    `.focused($b)` and `.focused($v, equals:)`, `.onKeyPress(...)`,
+    `KeyEquivalent`, `EventModifiers`, `KeyPress`; `ViewTree.key(_:)`,
+    `focusedElement`; see "How focus works" below.
+  - Modifiers: `padding`, `frame` (fixed and flexible), `background`,
+    `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
+    `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
+    `onTapGesture`.
+  - State: `@State`, `@Binding`, `@Bindable`, `@Environment`,
+    `EnvironmentKey`, and Swift's `@Observable` classes. A change
+    re-evaluates only the views that read the value.
+  - `ViewTree`: a live tree of a root view. `update()` re-evaluates
+    invalidated views and lays out; `render()` gives a `Bitmap`;
+    `elementTree` gives the tree as text; `click(at:)`, `click(text:)`
+    and `scroll(at:dx:dy:)` drive input; `onInvalidate` is the hook a
+    window uses to schedule a frame; `bodyEvaluations` counts work for
+    checks.
+  - `ImageRenderer` (SwiftUI's name) for one-shot images and trees.
+  - Not yet: scroll bars, animation, hover and pressed states, element
+    names, a focus ring (a PolymerDesign look), scrolling the focused view
+    into view.
+- `polymer` command: `check [filter] [--list] [--verbose]`,
+  `render <screen> <out.png> [--scale N] [--click "text"] [--scroll N]...`,
+  `tree <screen> [--click "text"] [--scroll N] [--key K]...` (steps are applied in
+  the order given), `zoom <in> <out> x y w h factor`.
+  Screens: `albums` (static), `counter` (state and buttons), `list` (a
+  scroll view of forty rows), `library` (a lazy stack of 20,000 rows). They live in
+  `PolymerChecks/UIChecks.swift`; a real screen registry comes with
+  PolymerApp.
+
+### How the view tree works (session 2)
+
+Read this before changing `PolymerUI`.
+
+- **Nodes persist.** Each view resolves to a `Node` (`Node.swift`). When a
+  body runs again, `reconcile(view, existing, context)` updates the node
+  already in that place if it is the same kind of view, otherwise makes a
+  new one and unmounts the old. Built-in views implement
+  `PrimitiveView.resolve(existing, context)`; containers call
+  `node.setChild(index, view, context)` and `removeChildren(from:)`.
+- **Views with a body** get a `HostNode<V>` (`State.swift`). It keeps the
+  view's `@State` storage, links `@State`/`@Environment` properties of
+  each new view value to it (found with `Mirror`, only for view types that
+  have such properties; the answer is cached per type), and evaluates
+  `body` inside `withObservationTracking`.
+- **Invalidation.** When something a body read changes, its host is put
+  on the tree's queue (safe from any thread). `ViewTree.update()` drains
+  the queue, evaluates outer hosts first (which brings inner ones up to
+  date), then lays out. Several changes before an update are one
+  evaluation.
+- **No stale registrations.** Swift's Observation has no public way to
+  cancel a tracking. Every tracking of a host therefore also reads the
+  host's `Epoch`; before each evaluation (and on unmount) the epoch is
+  changed, which fires the old trackings and removes them from every
+  object they watched. A generation number makes those firings no-ops.
+- **Deferred closures.** `ForEach` runs its content closure during
+  reconciliation, not inside the enclosing body, so it tracks its reads
+  through `context.host?.track`.
+- **Identity.** Structural by default. `ForEach` matches children by id
+  (duplicate ids log an error that says how to fix it). `if`/`else`
+  branches and `.id(_:)` changes start with fresh state.
+- **Layout.** `Node.measure(proposal)` remembers answers; `place` skips a
+  subtree whose frame is the same and has no changes below. A changed
+  host invalidates itself and its ancestors only. Stacks lay out the
+  flattened list of their content, so groups, `ForEach` and views with a
+  body contribute their children directly.
+- **Scrolling.** A `ScrollView`'s content keeps the frames it would have
+  unscrolled. The offset (whole pixels) is applied when drawing
+  (`Canvas.translated`, inside `Canvas.clipped`) and when hit-testing, so
+  a scroll step evaluates and lays out nothing. Stacks, text and fills
+  skip drawing what is outside the clip. Every row is still built and
+  laid out once; lazy stacks are the next step for long lists. The
+  element tree and `click(text:)` use on-screen positions
+  (`Node.screenFrame`).
+- **Element tree.** Views with a body appear by type name
+  (`SampleAlbumsView`), built-in elements by role; padding, frames and
+  groups are left out. Order is drawing order, back to front.
+- **Input.** `hitTest` finds the front-most drawn node; the click goes to
+  the nearest enclosing `Button` or tap handler. A `Button` is clickable
+  across its whole label area, a tap handler only where something is
+  drawn.
+
+### How lazy stacks work (session 3)
+
+Read this before changing `LazyStacks.swift`.
+
+- **Which ForEach is lazy.** `ResolveContext.lazyItems` is set by a lazy
+  stack and passed on only by nodes a stack sees through (groups, views
+  with a body, `if`/`else`, `.id`, tap handlers: `childrenAreLazy`); any
+  other node clears it in `setChild`. A `ForEach` that sees the flag
+  resolves to a `LazyForEachNode` instead of a `ForEachNode`.
+- **LazyForEachNode** keeps every element's id, a closure that builds an
+  element from the latest view values, and every element built so far.
+  Its `children` are only the elements in view, so drawing, hit-testing,
+  the element tree and `click(text:)` see only those. Built elements out
+  of view are kept (not unmounted), so their state survives scrolling, as
+  in SwiftUI; they are updated with new view values when they come back
+  into view (a version number says which are current). Memory therefore
+  grows with how much has been scrolled through; a recycling `List` can
+  come later if that matters.
+- **Sizes.** Items get their ideal size along the axis; across it the
+  stack fills what it is offered (SwiftUI's lazy stacks do the same), so
+  only built elements are measured. An element never measured counts as
+  the average of those that were (one is built up front if none was).
+  `starts` holds every item's position; it is worked out again (O(items),
+  about 20k additions for the library) only when a measured size differs
+  from the one used.
+- **Placement.** The visible part is the nearest `ScrollNode.viewport`
+  (or the whole tree without one), found by walking up. Items in it are
+  found by binary search on `starts`, then built and measured; if real
+  sizes moved things, that repeats (up to four rounds). When the total
+  length differs from what the parent was told, the stack invalidates
+  upward and sets `TreeState.layoutRequested`; `ViewTree.layout` then runs
+  another pass (up to eight, with an error that says how to fix rows whose
+  size never settles).
+- **Scrolling.** Lazy stacks register with their scroll view while
+  placed. After a scroll the scroll view calls `viewportMoved()`; only
+  when other items come into view does the stack ask for placement
+  (`setNeedsPlacementUpward`, which keeps every remembered size), so most
+  scroll steps still evaluate and lay out nothing. The scroll view now
+  clamps its offset before placing its content, because lazy stacks read
+  it then.
+- Known limits: rows above the view that were estimated move the content
+  when they are first measured (no anchoring yet); only the nearest scroll
+  view limits what is built; no `pinnedViews`. Check: `ui.lazy` (draws
+  pixel-identical to a plain stack, builds about ten rows per ten scrolled,
+  jumps to row 20,000 building only the rows there, keeps state, follows
+  identity).
+
+### How focus works (session 3)
+
+- **Who can hold focus.** Nodes answer `acceptsFocus`: buttons (`TapNode`
+  for `Button`) and `.focusable()` (`FocusableNode`). `TreeState.focused`
+  is the focused node (weak). Tab and Shift-Tab, when nothing handled
+  them, move through focusable nodes in drawing order (a depth-first walk
+  of `children`, so a lazy stack offers only its rows in view), wrapping.
+- **Clicks.** `click(at:)` focuses the nearest `focusesOnClick` node:
+  `.focusable()` views yes, buttons no (macOS behaviour).
+- **Keys.** `ViewTree.key(_:)` calls `handle(_:)` on the focused node and
+  then each parent until one returns `.handled`. A focused button handles
+  Space and Return. `.onKeyPress` is a `KeyPressNode` (passthrough).
+  With nothing focused, only Tab does anything (as in SwiftUI, keys need
+  focus).
+- **@FocusState** wraps a `@State` (same storage linking). `.focused(...)`
+  makes a `FocusBindingNode` that registers with the tree and holds two
+  closures: "is the binding set to me" and "set or clear it". Moving focus
+  (`TreeState.setFocus`) clears the bindings not around the focused node,
+  then sets those around it, so an optional shared by several fields ends
+  on the new one. After every evaluation `ViewTree.update` runs
+  `syncFocus`: a binding set to its view by code focuses the first
+  focusable node inside it; a cleared binding around the focused node
+  drops focus; a focused node that left the tree drops focus. Writes made
+  there re-evaluate the views that read them (up to four rounds). A
+  `FocusBindingNode` that leaves the tree clears its binding on unmount,
+  because the node can be freed before the tree looks again.
+- Every node now has `isMounted` (false after `unmount`).
+- Check: `ui.focus`.
+
+### Text: how close to CoreText
+
+`polymer check text.coretext` renders all 128 reference cases and writes
+stacked comparison images (CoreText, ours, 4x difference) and
+`report.json` to `out/checks/text/`.
+
+Mean absolute error went 11.6 → 1.22 (session 1) → 1.12 (session 2, with
+substitutions); worst image 1.93. The regression bound in the check is
+1.2. What was measured (CoreGraphics with font smoothing, macOS):
+- Line widths match CoreText exactly once GPOS kern lookups are counted
+  once (Inter lists them twice).
+- Stem darkening is an outline growth of `ppem * slope` pixels, capped at
+  0.6 px, where `slope = 0.0118 + 0.0191 * L` and L is the linear
+  luminance of the text colour (light text grows about twice as much as
+  dark text). No ppem cut-off up to 72 ppem.
+- Growth is the same horizontally and vertically, but vertical growth
+  goes upward only: the bottom edge stays put. (Fitted per image: offset
+  = half the growth, in every case.)
+- Coverage is blended as plain source-over in sRGB-encoded values, as CG
+  does.
+- CoreText applies contextual alternates by default (Inter raises the
+  colon in "3:42"); so do we now.
+
+Next tuning ideas: the remaining difference is mostly inside curves and
+counters; try growing by a Minkowski sum with a rectangle instead of the
+mitred offset; check against mid-grey text (needs new references, see Mac
+side) to confirm the luminance rule between the two measured colours.
+
+### Session 2 review: what was changed and why
+
+- **Text on a transparent canvas came out dark at the edges.** `drawText`
+  blended against the un-premultiplied background, which is black where
+  nothing is drawn. Text now goes through the same source-over as
+  everything else (identical on opaque backgrounds). Check:
+  `render.transparent`.
+- **Glyph pixels depended on the distance from the origin.** Positions
+  were narrowed to Float before subtracting the mask origin. Glyphs are
+  now rasterised at the fractional part of their position and the mask
+  moved by the whole part. Check: `text.cache`.
+- **Every glyph was parsed, flattened and rasterised on every draw.**
+  Added `GlyphCache`.
+- **Layout measured children over and over** (each stack level asked each
+  child three times, so cost grew exponentially with nesting). Sizes are
+  now remembered per node.
+- **The node tree was rebuilt from scratch for every image**, with no
+  place to keep state. Replaced by the retained tree described above.
+- `TextRenderingOptions.blend` and `darkening(x:y:)` removed: blending
+  was measured to be plain source-over and growth is one number
+  (`growth(ppem:luminance:)`). One way to do each thing.
+- `ForEach(data, content:)` without ids replaced by SwiftUI's three
+  forms. `.environment { }` (a closure) replaced by SwiftUI's
+  `.environment(\.keyPath, value)`.
+- The element tree lists a background before its content instead of as
+  the content's last child.
+- Checks run on the main actor (`Check.run` is `@MainActor`).
+- `polymer` arguments are parsed properly (options with values).
 
 ## Order of work (dependencies, not a schedule)
 
-1. `Package.swift` with the module layout from `Docs/DESIGN.md` §3; builds
-   on macOS and Windows (Swift 6.2). A `polymer` command with `check`.
-2. `PolymerBase`: geometry, colour (linear and sRGB), small collections,
-   IDs, logging, our own JSON. No Foundation.
-3. `PolymerText`: OpenType parsing (TrueType and CFF outlines), the
-   analytic-coverage rasteriser, Mac-style rendering (no hinting,
-   fractional positioning, stem darkening, gamma-correct blending), and
-   a check comparing our output with the CoreText images in
-   `Tests/Reference/Text` (`Docs/DESIGN.md` §4).
-   Text quality is a headline feature: get this excellent early.
-4. `PolymerRender` with a CPU reference renderer for headless images
-   (identical on every OS), then `PolymerGPU` (Metal on Mac; D3D12 on
-   Windows).
-5. `PolymerUI`: views, result builders, observation-based state, layout,
-   scrolling, animation; element tree dump and input driving in the
-   `polymer` command.
-6. `PolymerDesign`: tokens, components, Customize and right-click menus
-   built in.
-7. `PolymerPlatform` Mac and Windows backends: window, input, glass,
-   display refresh pacing (unlocked frame rate).
+1. ~~`Package.swift` and `polymer check`.~~ Done.
+2. ~~`PolymerBase`.~~ Done (logging is minimal).
+3. `PolymerText`: ~~parsing, rasteriser, Mac-style rendering, CoreText
+   check, glyph cache, substitutions, line breaking~~ done; still to do:
+   GDEF (skipping marks in lookups), CFF2 and variable fonts, colour
+   emoji, full Unicode line breaking (UAX #14; today spaces and hyphens),
+   font fallback, HarfBuzz behind our interface for complex scripts,
+   quantised subpixel positions if the cache needs a higher hit rate.
+4. `PolymerRender`: CPU renderer (rects, paths, glyph runs, clipping);
+   next a display list with damage regions, images, blur; then
+   `PolymerGPU` (D3D12 here).
+5. `PolymerUI`: ~~views, result builders, observation-based state,
+   identity, layout, text wrapping, buttons and clicks~~ done; next:
+   ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
+   and scroll physics, element names (stable paths for
+   Customize and for driving input), hover and pressed states, a focus
+   ring, animation, skipping bodies of unchanged `Equatable`
+   views, text cut to the height it is given.
+6. `PolymerDesign`: tokens, components, Customize and right-click menus.
+7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
+   pacing, DWM glass. `ViewTree.onInvalidate` is where a window asks for
+   a frame.
 8. The i2s Albums page on Polymer; then `PolymerAudio`.
 
 ## Windows side (where all sessions run)
 
-- Set up: Swift 6.2 toolchain for Windows, `swift build` and the checks
-  passing; note any toolchain gaps here.
-- Shared modules in the order above, then `PolymerPlatformWindows` (Win32
-  window, input, per-monitor DPI and refresh rate, DWM glass),
-  `PolymerGPUD3D12`, and WASAPI output.
+- Toolchain: Swift 6.4.2 (newer than the 6.2 floor) with VS Build Tools,
+  at `%LOCALAPPDATA%\Programs\Swift`. Works for debug and release,
+  `InlineArray`, `ContinuousClock`, SIMD, WinSDK, the `@Observable`
+  macro, `Synchronization` (`Mutex`, `Atomic`), `Mirror`.
+- Toolchain gaps: SwiftPM can't create the `.build/debug` and
+  `.build/release` symlinks (no symlink privilege), so products are at
+  `.build/out/Products/Debug-windows-x86_64/polymer.exe` (and
+  `Release-…`). The WinSDK module prints a harmless `wchar_t` warning.
+  `_wfopen` is marked deprecated (we use Win32 `CreateFileW` instead).
+  There is no Python on this PC; use the shell or Swift for scripts.
+- Quiet run (errors, failed checks and the summary only): `bash Tools/check.sh [debug|release] [filter]`.
+- Run checks from the repo root:
+  `swift build -c release` then
+  `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
+  The text check takes about 2 s in release; all checks take about 23 s
+  in debug. Both pass (22 checks) as of Windows session 3.
 
 ## Mac side (for a later Mac session)
 
+- Compile `PolymerPlatformMac` (written blind) and run `polymer check`.
 - `PolymerPlatformMac`, `PolymerGPUMetal`, CoreAudio output.
 - Check that headless images match the Windows ones exactly.
-- Regenerate `Tests/Reference/Text` if fonts or cases change.
+- Add reference cases with mid-grey and coloured text, with `liga`/`calt`
+  turned off, and with wrapped text (line spacing), to
+  `Tools/Reference/coretext_reference.swift`, then regenerate
+  `Tests/Reference/Text`.
 
 ## Decisions log
 
 - 2026-11-13: name Polymer; public repo without encryption; no number
   targets; no milestones; own text rasteriser instead of FreeType; no
   Foundation; MP3 decoder our own.
+- 2026-11-13 (Windows 1): modules enter `Package.swift` only once they have
+  code. Platform backends are picked once, in the entry point
+  (`Platform.install`); the only `#if os` outside backends is there.
+  Checks are our own runner (`polymer check`), not XCTest (which needs
+  Foundation). Geometry types are named `Point`/`Size`/`Rect` (listed in
+  DIFFERENCES.md). The font face type is `FontFace`, leaving `Font` free
+  for the SwiftUI-style font description in PolymerUI. Canvas blends in
+  sRGB-encoded values (as CoreGraphics and browsers do), so colours and
+  glass match the Mac look; text uses the measured CoreText rule above.
+- 2026-11-13 (Windows 1): `View` and `ViewBuilder` are `@MainActor`, as in
+  SwiftUI; checks run on the main actor. Shapes take 10x10 points when
+  offered no size, Spacer's minimum length and stack spacing default to
+  8 points (SwiftUI's values).
+- 2026-11-13 (Windows 2): observable state is Swift's own Observation
+  library (`@Observable`, `withObservationTracking`), so models are
+  written exactly as for SwiftUI. Observation and Synchronization ship
+  with the Swift toolchain like the standard library; they are not
+  Foundation. `import Polymer` re-exports Observation.
+- 2026-11-13 (Windows 2): `@State` and `@Environment` are found with
+  `Mirror`, as the only use of reflection: once per view type to learn
+  whether it has such properties, then per evaluation only for the types
+  that do. DESIGN §5 says "no reflection" about start-up; this is noted
+  here because it touches that sentence. The alternative (linking state on
+  first read) loses state that a body never reads.
+- 2026-11-13 (Windows 2): no body is skipped yet when its view value is
+  unchanged; a parent's evaluation evaluates the views inside it. Fine
+  grain comes from observation (a change reaches only the readers).
+- 2026-11-13 (Windows 2): text lines are spaced by the line height
+  rounded up to whole pixels, each baseline on a pixel row, so wrapped
+  lines are evenly spaced at any scale.
+- 2026-11-14 (Windows 3): lazy stacks keep built elements (state survives
+  scrolling, as in SwiftUI) rather than recycling them; they estimate
+  unbuilt rows by the average measured size; they fill the space offered
+  across their axis. Laziness is decided while resolving (a context flag)
+  rather than by deferring every `ForEach`, so plain stacks behave exactly
+  as before.
+- 2026-11-13 (Windows 2): the glyph cache keys on exact fractional
+  positions rather than quantised ones, so nothing changes in the
+  CoreText comparison. It empties itself when it reaches its limit (no
+  LRU yet).
+
+## For the owner's review (design-visible, not blocking)
+
+- `Divider` is 1 point thick and uses a separator colour of white at 14%
+  opacity until PolymerDesign tokens exist. On 2x screens that is 2
+  physical pixels; say if "1px lines" should mean 1 physical pixel.
+- Text frames are rounded up to whole pixels and baselines snapped to the
+  pixel grid vertically (glyph positions stay fractional horizontally).
+- `Button` has no look of its own yet (it draws its label); button styles
+  belong to PolymerDesign.
+- Keyboard focus has no visible ring yet. Buttons take focus from Tab
+  (as with macOS full keyboard access, and on Windows) but not from a
+  click. The ring's look is a PolymerDesign decision.
+- Element names: today input is driven by visible text
+  (`--click "Add"`). Stable names and paths for Customize are not
+  designed yet; that is a PolymerDesign decision.
+- macOS floor is 15, because view invalidation uses `Mutex` and `Atomic`
+  from Swift's Synchronization module. If i2s must run on older macOS,
+  say so and the lock moves behind the platform layer instead.
+- Sample screens: `polymer render albums out.png --scale 2`,
+  `polymer render counter out.png --scale 2 --click Add --click Step`,
+  `polymer render list out.png --scale 2 --scroll 290 --click "Track 12"`.
