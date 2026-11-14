@@ -133,6 +133,38 @@ public struct Canvas {
         return TextLayout.width(glyphs)
     }
 
+    /// Draws the items of `list` that touch `region` (pixels; nil for the
+    /// whole canvas), changing no pixel outside it. Pixels inside come out
+    /// exactly as if the whole list were drawn.
+    public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) {
+        let region = region ?? PixelRect(x: 0, y: 0, width: width, height: height)
+        let savedClip = clip, savedOrigin = origin
+        for item in list.items where item.bounds.intersects(region) {
+            clip = item.clip.clamped(to: region)
+            origin = item.origin
+            switch item.operation {
+            case .rect(let r, let c): fill(r, c)
+            case .path(let p, let c): fill(p, c)
+            case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
+            }
+        }
+        clip = savedClip; origin = savedOrigin
+    }
+
+    /// Sets every pixel of `region` to `color`, as a new canvas with that background.
+    public mutating func clear(_ region: PixelRect, to color: Color) {
+        let r = region.clamped(to: PixelRect(x: 0, y: 0, width: width, height: height))
+        guard !r.isEmpty else { return }
+        let a = Float(color.opacity)
+        let px: (Float, Float, Float, Float) = a > 0 ? (Float(color.red) * a, Float(color.green) * a, Float(color.blue) * a, a) : (0, 0, 0, 0)
+        for y in r.y..<(r.y + r.height) {
+            for x in r.x..<(r.x + r.width) {
+                let i = (y * width + x) * 4
+                pixels[i] = px.0; pixels[i + 1] = px.1; pixels[i + 2] = px.2; pixels[i + 3] = px.3
+            }
+        }
+    }
+
     /// 8-bit sRGB, straight alpha.
     public var bitmap: Bitmap {
         var out = [UInt8](repeating: 0, count: width * height * 4)

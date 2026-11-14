@@ -125,8 +125,8 @@ class Node {
 
     // MARK: Drawing
 
-    func draw(_ canvas: inout Canvas) {
-        for c in children { c.draw(&canvas) }
+    func draw(_ list: inout DisplayList) {
+        for c in children { c.draw(&list) }
     }
 
     // MARK: Element tree

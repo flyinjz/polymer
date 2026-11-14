@@ -2,18 +2,18 @@
 
 Current state of the work. Every session updates this before it ends.
 
-## State (2026-11-14, Windows session 3)
+## State (2026-11-14, Windows session 4)
 
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
   `Docs/DIFFERENCES.md`.
-- Sessions 1 to 3 are committed (2026-11-14), not pushed until the owner
+- Sessions 1 to 4 are committed (2026-11-14), not pushed until the owner
   says so. Signing needs the owner's passphrase cached on this PC; test
   without opening a prompt:
   `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (24 checks: base, text, render, ui).
+  passes (27 checks: base, text, render, ui).
 
 ### Done
 
@@ -49,7 +49,8 @@ Current state of the work. Every session updates this before it ends.
   - `GlyphCache`: outlines and coverage masks kept between draws, keyed by
     the exact fractional pixel offset (same pixels cached or not).
 - `PolymerRender`: `Bitmap`, PNG decode/encode (our own), `Canvas` (CPU
-  reference renderer: rects, paths, glyph runs, rectangular clipping).
+  reference renderer: rects, paths, glyph runs, rectangular clipping),
+  `DisplayList` with damage (session 4; see "Display list and damage").
 - `PolymerUI`:
   - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
     if/else, optionals), `Group`, `ForEach` (by `id:` key path,
@@ -136,7 +137,7 @@ Read this before changing `PolymerUI`.
   body contribute their children directly.
 - **Scrolling.** A `ScrollView`'s content keeps the frames it would have
   unscrolled. The offset (whole pixels) is applied when drawing
-  (`Canvas.translated`, inside `Canvas.clipped`) and when hit-testing, so
+  (`DisplayList.translated`, inside `.clipped`) and when hit-testing, so
   a scroll step evaluates and lays out nothing. Stacks, text and fills
   skip drawing what is outside the clip. Every row is still built and
   laid out once; lazy stacks are the next step for long lists. The
@@ -149,6 +150,40 @@ Read this before changing `PolymerUI`.
   the nearest enclosing `Button` or tap handler. A `Button` is clickable
   across its whole label area, a tap handler only where something is
   drawn.
+
+### Display list and damage (session 4)
+
+Read this before changing drawing in `PolymerUI` or `PolymerRender`.
+
+- **Nodes record, renderers draw.** `Node.draw(_ list: inout DisplayList)`
+  records operations with the calls `Canvas` has (`fill` for rects and
+  paths, `drawGlyphs`, `clipped`, `translated`, `isVisible`). Each
+  `DisplayItem` keeps its operation in local points plus the origin and
+  pixel clip in force, and `bounds`: the pixels it may change (rects and
+  paths rounded outward; glyph runs from the font's `head` glyph box plus
+  2 pixels for darkening). Items that would draw nothing are left out.
+  `Canvas.draw(list, in: region)` replays the items touching a region
+  with the very same arithmetic, so a region drawn alone matches the
+  whole image there. The GPU renderer will consume the same list.
+- **Damage.** `DisplayList.damage(since:)` trims the common start and end,
+  then matches the middle items by value in order (greedy, through a
+  dictionary); unmatched items damage their bounds, old and new. A pixel
+  outside the damage is covered by the same items in the same order in
+  both frames, so it can't differ. Rectangles that touch are joined;
+  past eight, the pair whose union adds least area is joined.
+- **ViewTree.render** records a list each frame (two lists are reused in
+  turn, so no allocation once warm), compares it with the last, clears and
+  redraws only the damage in the kept canvas, and exposes `damage` and
+  `displayList`. A size, scale or background change redraws everything.
+  `render()` still converts the whole canvas to a `Bitmap` (headless
+  output); a window will present only the damage.
+- Known limits: scrolling damages the whole viewport (moving the
+  pixels that stay visible comes later); a changed text run damages the
+  whole run; the kept CPU canvas is 16 bytes per pixel.
+- Checks: `render.display-list` (recording, damage cases, partial equals
+  whole), `ui.damage` (an Add click redraws about 4% of the counter image;
+  every frame while scrolling the plain and lazy lists equals a whole
+  draw; every drawn pixel lies in some item's bounds).
 
 ### Skipping unchanged views (session 4)
 
@@ -342,8 +377,9 @@ side) to confirm the luminance rule between the two measured colours.
    emoji, full Unicode line breaking (UAX #14; today spaces and hyphens),
    font fallback, HarfBuzz behind our interface for complex scripts,
    quantised subpixel positions if the cache needs a higher hit rate.
-4. `PolymerRender`: CPU renderer (rects, paths, glyph runs, clipping);
-   next a display list with damage regions, images, blur; then
+4. `PolymerRender`: CPU renderer (rects, paths, glyph runs, clipping),
+   ~~display list with damage regions~~ (session 4);
+   next images, blur, scrolling by moving pixels; then
    `PolymerGPU` (D3D12 here).
 5. `PolymerUI`: ~~views, result builders, observation-based state,
    identity, layout, text wrapping, buttons and clicks~~ done; next:
@@ -374,7 +410,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (24 checks) as of Windows session 3.
+  in debug. Both pass (27 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 
@@ -429,6 +465,11 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): views record a display list instead of drawing
+  into a canvas; the CPU canvas replays it. One drawing path for the CPU
+  reference, damage and the coming GPU renderer. Damage matching is
+  greedy rather than a full longest-common-subsequence (linear, and wrong
+  only towards drawing more).
 - 2026-11-14 (Windows 4): text offered too little height keeps the whole
   lines that fit (never fewer than one) and ends the last in an ellipsis,
   measured against its line height rounded to pixels; `lineLimit` and the

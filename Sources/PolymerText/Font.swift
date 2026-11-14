@@ -24,6 +24,8 @@ public final class FontFace: Sendable {
     public let xHeight: Int
     public let capHeight: Int
     public let familyName: String
+    /// Box around every glyph in font units, y up (the `head` table): xMin, yMin, xMax, yMax.
+    public let glyphBounds: (xMin: Int, yMin: Int, xMax: Int, yMax: Int)
 
     let indexToLocFormat: Int
     let hmtxCount: Int
@@ -69,6 +71,8 @@ public final class FontFace: Sendable {
         unitsPerEm = Int(data.u16(at: head.0 + 18))
         guard unitsPerEm >= 16 else { throw FontError("unitsPerEm \(unitsPerEm) is invalid") }
         indexToLocFormat = Int(data.i16(at: head.0 + 50))
+        glyphBounds = (Int(data.i16(at: head.0 + 36)), Int(data.i16(at: head.0 + 38)),
+                       Int(data.i16(at: head.0 + 40)), Int(data.i16(at: head.0 + 42)))
         glyphCount = Int(data.u16(at: maxp.0 + 4))
         ascender = Int(data.i16(at: hhea.0 + 4))
         descender = Int(data.i16(at: hhea.0 + 6))

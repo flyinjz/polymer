@@ -17,6 +17,18 @@ public final class ViewTree {
     private var pointer: Point?
     /// The button or tap handler the pointer went down on.
     private weak var pressedNode: Node?
+    /// The last frame: what it drew, its pixels and background.
+    private var lastList: DisplayList?
+    private var spareList: DisplayList?
+    private var frameCanvas: Canvas?
+    private var frameBackground: Color?
+
+    /// Pixel rectangles the last `render()` drew: the whole image the first
+    /// time (or after a size or background change), then only what changed
+    /// since the frame before; empty when nothing did.
+    public private(set) var damage: [PixelRect] = []
+    /// What the last `render()` drew, in drawing order.
+    public var displayList: DisplayList? { lastList }
 
     /// Environment of the root view. `displayScale` is the pixels per point images are drawn at.
     public var environment: EnvironmentValues { didSet { needsResolve = true } }
@@ -107,15 +119,40 @@ public final class ViewTree {
         Logger("PolymerUI").error("Layout did not settle after 8 passes: a row in a lazy stack changes size every time it is measured. Give rows a size that depends only on their content and the width offered.")
     }
 
-    /// Draws the tree into a new image of the root's size at the display scale.
+    /// Draws the tree into an image of the root's size at the display scale.
+    ///
+    /// The tree is recorded as a display list and compared with the last
+    /// frame's; only the pixels that can differ (`damage`) are drawn again
+    /// into the kept image. The result is identical to drawing everything.
     public func render(background: Color = .clear) -> Bitmap {
         update()
         let scale = environment.displayScale
-        var canvas = Canvas(width: Int((size.width * scale).rounded()), height: Int((size.height * scale).rounded()),
-                            scale: scale, background: background)
-        canvas.glyphCache = glyphCache
-        root?.draw(&canvas)
-        return canvas.bitmap
+        let w = Int((size.width * scale).rounded()), h = Int((size.height * scale).rounded())
+        var list = spareList.flatMap { $0.width == w && $0.height == h && $0.scale == scale ? $0 : nil }
+            ?? DisplayList(width: w, height: h, scale: scale)
+        spareList = nil
+        list.removeAll()
+        root?.draw(&list)
+        if var canvas = frameCanvas, canvas.width == w, canvas.height == h, canvas.scale == scale,
+           frameBackground == background, let old = lastList {
+            frameCanvas = nil   // the only reference, so drawing doesn't copy the pixels
+            damage = list.damage(since: old)
+            for r in damage {
+                canvas.clear(r, to: background)
+                canvas.draw(list, in: r)
+            }
+            frameCanvas = canvas
+        } else {
+            var canvas = Canvas(width: w, height: h, scale: scale, background: background)
+            canvas.glyphCache = glyphCache
+            canvas.draw(list)
+            damage = w > 0 && h > 0 ? [list.fullRect] : []
+            frameCanvas = canvas
+            frameBackground = background
+        }
+        spareList = lastList
+        lastList = list
+        return frameCanvas!.bitmap
     }
 
     /// The element tree as text: role, frame in points, and details, one element per line.

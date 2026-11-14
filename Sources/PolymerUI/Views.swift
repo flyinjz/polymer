@@ -78,8 +78,8 @@ final class TextNode: Node {
         return Size(width: ceilToPixel(widest), height: lineHeight(font) * Double(ls.count))
     }
 
-    override func draw(_ canvas: inout Canvas) {
-        guard let font, canvas.isVisible(frame) else { return }
+    override func draw(_ list: inout DisplayList) {
+        guard let font, list.isVisible(frame) else { return }
         let ls = lines(font, width: frame.width, height: frame.height)
         let lh = lineHeight(font)
         let top = frame.minY + (frame.height - lh * Double(ls.count)) / 2 + (lh - font.lineHeight) / 2 + font.ascent
@@ -89,7 +89,7 @@ final class TextNode: Node {
             let slack = max(0, frame.width - line.width)
             let dx: Double = switch alignment { case .leading: 0; case .center: slack / 2; case .trailing: slack }
             let x = ((frame.minX + dx) * scale).rounded() / scale
-            canvas.drawGlyphs(line.glyphs, font: font.face, size: font.size, at: Point(x: x, y: baseline),
+            list.drawGlyphs(line.glyphs, font: font.face, size: font.size, at: Point(x: x, y: baseline),
                               color: color, options: options)
         }
     }
@@ -125,7 +125,7 @@ final class FillNode: Node {
         // SwiftUI shapes take 10 points when given no size.
         p.replacingUnspecified(Size(width: 10, height: 10))
     }
-    override func draw(_ canvas: inout Canvas) { if canvas.isVisible(frame) { canvas.fill(frame, color) } }
+    override func draw(_ list: inout DisplayList) { if list.isVisible(frame) { list.fill(frame, color) } }
 }
 
 /// Flexible space along the enclosing stack's axis.
@@ -169,5 +169,5 @@ final class DividerNode: Node {
     override func sizeThatFits(_ p: ProposedViewSize) -> Size {
         vertical ? Size(width: 1, height: p.height ?? 0) : Size(width: p.width ?? 0, height: 1)
     }
-    override func draw(_ canvas: inout Canvas) { if canvas.isVisible(frame) { canvas.fill(frame, color) } }
+    override func draw(_ list: inout DisplayList) { if list.isVisible(frame) { list.fill(frame, color) } }
 }

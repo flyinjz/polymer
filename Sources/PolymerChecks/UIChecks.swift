@@ -830,4 +830,72 @@ struct EquatableScreen: View {
         c.expectEqual(height(textLine(stacked.elementTree)), Int(lh) * 2, "a stack's leftover height cuts the text:\n\(stacked.elementTree)")
         try Platform.files.write(PNG.encode(cut), to: Path.join(c.outputDirectory, "ui/text-cut-to-height@2x.png"))
     },
+    Check("ui.damage") { c in
+        let bg = Color(white: 0.063)
+        // The oracle: the frame's whole display list drawn into a new image.
+        @MainActor func drawnWhole(_ t: ViewTree) -> Bitmap? {
+            guard let l = t.displayList else { return nil }
+            var canvas = Canvas(width: l.width, height: l.height, scale: l.scale, background: bg)
+            canvas.draw(l)
+            return canvas.bitmap
+        }
+        func area(_ rs: [PixelRect]) -> Int { rs.reduce(0) { $0 + $1.width * $1.height } }
+
+        let model = CounterModel()
+        var e = EnvironmentValues()
+        e.displayScale = 2
+        let tree = ViewTree(try sampleCounter(root: c.root, model: model), environment: e)
+        let first = tree.render(background: bg)
+        let whole = first.width * first.height
+        c.expectEqual(area(tree.damage), whole, "the first frame draws everything")
+        c.expect(tree.render(background: bg) == first && tree.damage.isEmpty, "nothing changed: nothing drawn")
+
+        // A click changes one label: only around it is drawn again.
+        c.expect(tree.click(text: "Add"), "Add clicked")
+        let after = tree.render(background: bg)
+        c.expect(!tree.damage.isEmpty && area(tree.damage) * 10 < whole,
+                 "a small part is drawn again: \(tree.damage) of \(first.width)x\(first.height)")
+        if let p = tree.point(ofText: "Count 1") {
+            let px = Int(p.x * 2), py = Int(p.y * 2)
+            c.expect(tree.damage.contains { px >= $0.x && px < $0.x + $0.width && py >= $0.y && py < $0.y + $0.height },
+                     "the changed label is inside the damage")
+        } else { c.fail("the new label is missing") }
+        c.note("Add clicked: drew \(area(tree.damage)) of \(whole) pixels in \(tree.damage)")
+        c.expect(after == drawnWhole(tree), "same pixels as drawing the whole list")
+        c.expect(after == ViewTree(try sampleCounter(root: c.root, model: model), environment: e).render(background: bg),
+                 "and as a new tree")
+
+        // Every drawn pixel lies inside some item's bounds (the damage relies on it).
+        if let l = tree.displayList {
+            var canvas = Canvas(width: l.width, height: l.height, scale: l.scale)
+            canvas.draw(l)
+            let img = canvas.bitmap
+            var outside = 0
+            for y in 0..<img.height {
+                for x in 0..<img.width where img[x, y].a > 0 {
+                    if !l.items.contains(where: { x >= $0.bounds.x && x < $0.bounds.x + $0.bounds.width && y >= $0.bounds.y && y < $0.bounds.y + $0.bounds.height }) {
+                        outside += 1
+                    }
+                }
+            }
+            c.expectEqual(outside, 0, "pixels drawn outside every item's bounds")
+        }
+
+        // Another background: everything again.
+        _ = tree.render(background: .black)
+        c.expectEqual(area(tree.damage), whole, "a new background draws everything")
+
+        // Scrolling, plain and lazy: every frame equals a whole draw.
+        for name in ["list", "library"] {
+            guard let t = try sampleTree(name, root: c.root, scale: 2) else { c.fail("no \(name) screen"); continue }
+            _ = t.render(background: bg)
+            for dy in [40.0, 40, -25, 300, 7, -1000, 5000] {
+                _ = t.scroll(at: Point(x: 120, y: 120), dy: dy)
+                let img = t.render(background: bg)
+                c.expect(img == drawnWhole(t), "\(name): partial frame after scrolling \(dy) equals a whole draw")
+            }
+            _ = t.click(text: "Track 3")
+            c.expect(t.render(background: bg) == drawnWhole(t), "\(name): partial frame after a click equals a whole draw")
+        }
+    },
 ]

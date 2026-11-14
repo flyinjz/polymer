@@ -141,8 +141,8 @@ final class LayerNode: Node {
         let s = children[1].measure(ProposedViewSize(r.size))
         children[1].place(Rect(origin: Alignment.center.origin(of: s, in: r), size: s))
     }
-    override func draw(_ canvas: inout Canvas) {
-        if behind { children[1].draw(&canvas); children[0].draw(&canvas) } else { children[0].draw(&canvas); children[1].draw(&canvas) }
+    override func draw(_ list: inout DisplayList) {
+        if behind { children[1].draw(&list); children[0].draw(&list) } else { children[0].draw(&list); children[1].draw(&list) }
     }
     override func hitTest(_ p: Point) -> Node? {
         let front = behind ? children[0] : children[1], back = behind ? children[1] : children[0]
@@ -169,12 +169,12 @@ final class BorderNode: Node {
     override var role: String { "Border" }
     override var detail: String { color.description }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { p.replacingUnspecified(.zero) }
-    override func draw(_ canvas: inout Canvas) {
+    override func draw(_ list: inout DisplayList) {
         let f = frame, w = width
-        canvas.fill(Rect(x: f.minX, y: f.minY, width: f.width, height: w), color)
-        canvas.fill(Rect(x: f.minX, y: f.maxY - w, width: f.width, height: w), color)
-        canvas.fill(Rect(x: f.minX, y: f.minY + w, width: w, height: f.height - 2 * w), color)
-        canvas.fill(Rect(x: f.maxX - w, y: f.minY + w, width: w, height: f.height - 2 * w), color)
+        list.fill(Rect(x: f.minX, y: f.minY, width: f.width, height: w), color)
+        list.fill(Rect(x: f.minX, y: f.maxY - w, width: f.width, height: w), color)
+        list.fill(Rect(x: f.minX, y: f.minY + w, width: w, height: f.height - 2 * w), color)
+        list.fill(Rect(x: f.maxX - w, y: f.minY + w, width: w, height: f.height - 2 * w), color)
     }
 }
 
@@ -192,8 +192,8 @@ final class ClipNode: Node {
     override var isElement: Bool { false }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r) }
-    override func draw(_ canvas: inout Canvas) {
-        canvas.clipped(to: frame) { c in children[0].draw(&c) }
+    override func draw(_ list: inout DisplayList) {
+        list.clipped(to: frame) { c in children[0].draw(&c) }
     }
     override func hitTest(_ p: Point) -> Node? { frame.contains(p) ? children[0].hitTest(p) : nil }
 }

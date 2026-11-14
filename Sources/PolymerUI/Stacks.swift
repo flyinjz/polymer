@@ -156,8 +156,8 @@ final class StackNode: Node {
     }
 
     /// Draws only the children that can be seen (inside a scroll view most are not).
-    override func draw(_ canvas: inout Canvas) {
-        for c in flat where canvas.isVisible(c.frame) { c.draw(&canvas) }
+    override func draw(_ list: inout DisplayList) {
+        for c in flat where list.isVisible(c.frame) { c.draw(&list) }
     }
 
     override func placeChildren(in r: Rect) {

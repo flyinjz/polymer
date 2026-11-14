@@ -51,4 +51,72 @@ import PolymerRender
         for y in 0..<8 { for x in 0..<8 where k[x, y].r == 255 { lit += 1 } }
         c.expectEqual(lit, 9, "only the clipped 3x3 area is filled")
     },
+    Check("render.display-list") { c in
+        let red = Color(red: 1, green: 0, blue: 0), blue = Color(red: 0, green: 0, blue: 1)
+        func list(_ body: (inout DisplayList) -> Void) -> DisplayList {
+            var l = DisplayList(width: 100, height: 100, scale: 2)
+            body(&l)
+            return l
+        }
+        let a = list { l in
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red)
+            l.fill(Rect(x: 20, y: 20, width: 10, height: 10), blue)
+            l.fill(Rect(x: 40, y: 0, width: 5, height: 5), .white)
+        }
+        c.expectEqual(a.damage(since: a), [], "the same list: no damage")
+        // Recording mirrors the canvas: clipping and moving are folded into each item.
+        let clipped = list { l in
+            l.translated(by: Point(x: 5, y: 0)) { l in
+                l.clipped(to: Rect(x: 0, y: 0, width: 4, height: 4)) { l in l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red) }
+            }
+            l.fill(Rect(x: 60, y: 60, width: 10, height: 10), .clear)
+            l.fill(Rect(x: 200, y: 0, width: 10, height: 10), red)
+        }
+        c.expectEqual(clipped.items.count, 1, "invisible and off-canvas fills are left out")
+        c.expectEqual(clipped.items.first?.bounds, PixelRect(x: 10, y: 0, width: 8, height: 8), "bounds in pixels, inside the clip")
+
+        // One item changed: its old and new pixels, nothing else.
+        let b = list { l in
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red)
+            l.fill(Rect(x: 20, y: 20, width: 10, height: 10), red)
+            l.fill(Rect(x: 40, y: 0, width: 5, height: 5), .white)
+        }
+        c.expectEqual(b.damage(since: a), [PixelRect(x: 40, y: 40, width: 20, height: 20)], "a recoloured square")
+        // Two separate changes stay two rectangles.
+        let d = list { l in
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 11), red)
+            l.fill(Rect(x: 20, y: 20, width: 10, height: 10), blue)
+            l.fill(Rect(x: 40, y: 0, width: 5, height: 5), red)
+        }
+        c.expectEqual(d.damage(since: a), [PixelRect(x: 0, y: 0, width: 20, height: 22), PixelRect(x: 80, y: 0, width: 10, height: 10)],
+                      "two changes far apart")
+        // Order matters where items overlap: swapping two damages both.
+        let over = list { l in
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red)
+            l.fill(Rect(x: 5, y: 5, width: 10, height: 10), blue)
+        }
+        let swapped = list { l in
+            l.fill(Rect(x: 5, y: 5, width: 10, height: 10), blue)
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red)
+        }
+        c.expectEqual(swapped.damage(since: over), [PixelRect(x: 10, y: 10, width: 20, height: 20)], "reordered overlapping items: the one now out of order")
+        // An item added in the middle damages only itself.
+        let inserted = list { l in
+            l.fill(Rect(x: 0, y: 0, width: 10, height: 10), red)
+            l.fill(Rect(x: 30, y: 40, width: 5, height: 5), red)
+            l.fill(Rect(x: 20, y: 20, width: 10, height: 10), blue)
+            l.fill(Rect(x: 40, y: 0, width: 5, height: 5), .white)
+        }
+        c.expectEqual(inserted.damage(since: a), [PixelRect(x: 60, y: 80, width: 10, height: 10)], "an inserted item")
+        c.expectEqual(DisplayList(width: 50, height: 100, scale: 2).damage(since: a), [PixelRect(x: 0, y: 0, width: 50, height: 100)],
+                      "another size: everything")
+
+        // Drawing only the damage gives the pixels of drawing everything.
+        var canvas = Canvas(width: 100, height: 100, scale: 2, background: .black)
+        canvas.draw(a)
+        for r in d.damage(since: a) { canvas.clear(r, to: .black); canvas.draw(d, in: r) }
+        var full = Canvas(width: 100, height: 100, scale: 2, background: .black)
+        full.draw(d)
+        c.expect(canvas.bitmap == full.bitmap, "partial redraw equals a full draw")
+    },
 ]

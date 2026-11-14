@@ -346,12 +346,12 @@ final class LazyStackNode: Node {
         }
     }
 
-    override func draw(_ canvas: inout Canvas) {
+    override func draw(_ list: inout DisplayList) {
         for seg in segments {
             switch seg {
-            case .node(let n): if canvas.isVisible(n.frame) { n.draw(&canvas) }
+            case .node(let n): if list.isVisible(n.frame) { n.draw(&list) }
             case .elements(let f):
-                for e in f.children { for x in e.flattened where canvas.isVisible(x.frame) { x.draw(&canvas) } }
+                for e in f.children { for x in e.flattened where list.isVisible(x.frame) { x.draw(&list) } }
             }
         }
     }
