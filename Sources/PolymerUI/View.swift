@@ -34,9 +34,13 @@ func reconcile<V: View>(_ view: V, _ existing: Node?, _ c: ResolveContext) -> No
     let node: Node
     if let p = view as? PrimitiveView {
         node = p.resolve(existing, c)
+    } else if let host = existing as? HostNode<V> {
+        // An unchanged Equatable view in an unchanged environment: nothing below changed.
+        if !host.update(view, c) { return host }
+        node = host
     } else {
-        let host = (existing as? HostNode<V>) ?? HostNode<V>(view, c)
-        host.update(view, c)
+        let host = HostNode<V>(view, c)
+        _ = host.update(view, c)
         node = host
     }
     node.scale = c.environment.displayScale

@@ -50,6 +50,42 @@ public struct EnvironmentValues {
         get { (custom[ObjectIdentifier(key)] as? K.Value) ?? K.defaultValue }
         set { custom[ObjectIdentifier(key)] = newValue }
     }
+
+    /// True when every value is known to be the same as in `other`, so a view
+    /// below that did not change needs nothing done. Values that can't be
+    /// compared (neither `Equatable` nor a class instance) count as changed.
+    func isSame(as other: EnvironmentValues) -> Bool {
+        guard font == other.font, foregroundColor == other.foregroundColor, separatorColor == other.separatorColor,
+              textRendering == other.textRendering, displayScale == other.displayScale, lineLimit == other.lineLimit,
+              multilineTextAlignment == other.multilineTextAlignment, isEnabled == other.isEnabled,
+              sameStyle(buttonStyle, other.buttonStyle), custom.count == other.custom.count else { return false }
+        for (k, v) in custom {
+            guard let o = other.custom[k], sameValue(v, o) else { return false }
+        }
+        return true
+    }
+}
+
+/// Equal by `==`, or the same class instance.
+private func sameValue(_ a: Any, _ b: Any) -> Bool {
+    guard ObjectIdentifier(type(of: a)) == ObjectIdentifier(type(of: b)) else { return false }
+    if let e = a as? any Equatable { return e.isEqual(to: b) }
+    if type(of: a) is AnyObject.Type { return (a as AnyObject) === (b as AnyObject) }
+    return false
+}
+
+/// Button styles: also the same when of one type with no stored properties.
+private func sameStyle<S: ButtonStyle>(_ a: S, _ b: any ButtonStyle) -> Bool {
+    guard let b = b as? S else { return false }
+    return MemoryLayout<S>.size == 0 || sameValue(a, b)
+}
+
+extension Equatable {
+    /// `==` against a value of unknown type; false when the types differ.
+    func isEqual(to other: Any) -> Bool {
+        guard let o = other as? Self else { return false }
+        return self == o
+    }
 }
 
 struct EnvironmentModifier<Content: View>: View, PrimitiveView {

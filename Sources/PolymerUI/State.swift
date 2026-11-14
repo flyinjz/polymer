@@ -122,7 +122,7 @@ final class EnvironmentBox {
 
 /// Reads a value from the environment at the view's place in the tree.
 @propertyWrapper
-public struct Environment<Value>: DynamicProperty, LinkedProperty {
+public struct Environment<Value>: DynamicProperty, LinkedProperty, EnvironmentReading {
     let keyPath: KeyPath<EnvironmentValues, Value>
     let box = EnvironmentBox()
 
@@ -237,7 +237,31 @@ protocol ViewHost: AnyObject {
     return out
 }
 
-@MainActor private var linkedViewTypes: [ObjectIdentifier: Bool] = [:]
+/// Implemented by `@Environment`, so views that read the environment are known.
+protocol EnvironmentReading {}
+
+/// What the framework needs to know about a view type, worked out once per type.
+struct ViewTypeInfo {
+    /// Has `@State`, `@Environment` or similar properties to link before `body` runs.
+    var linked: Bool
+    /// Has `@Environment` properties (or nests a value that may have them).
+    var readsEnvironment: Bool
+    /// Conforms to `Equatable`: its body is skipped when a new value equals the old one.
+    var equatable: Bool
+}
+
+@MainActor private var viewTypes: [ObjectIdentifier: ViewTypeInfo] = [:]
+
+@MainActor func viewTypeInfo<V: View>(_ view: V) -> ViewTypeInfo {
+    let type = ObjectIdentifier(V.self)
+    if let known = viewTypes[type] { return known }
+    let props = linkedProperties(view)
+    let info = ViewTypeInfo(linked: !props.isEmpty,
+                            readsEnvironment: view is LinksNestedProperties || props.contains { $0 is EnvironmentReading },
+                            equatable: view is any Equatable)
+    viewTypes[type] = info
+    return info
+}
 
 /// The node of a view with a body. Keeps the view's state and its
 /// dependencies, and holds the node of its body as its only child.
@@ -248,7 +272,9 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
     private let invalidator: Invalidator
     private let epoch = Epoch()
     private let name: String
-    private let linked: Bool
+    private let info: ViewTypeInfo
+    /// The last body of an `Equatable` view, handed down again when only the environment changed.
+    private var body: V.Body?
     private var mounted = true
     var isDirty = false
     var depth: Int { context.depth }
@@ -260,11 +286,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         // The type's name without generic arguments.
         let full = String(describing: V.self)
         name = String(full.prefix { $0 != "<" })
-        let type = ObjectIdentifier(V.self)
-        if let known = linkedViewTypes[type] { linked = known } else {
-            linked = !linkedProperties(view).isEmpty
-            linkedViewTypes[type] = linked
-        }
+        info = viewTypeInfo(view)
         super.init()
         invalidator.host = self
     }
@@ -272,11 +294,37 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
     override var role: String { name }
     override var isElement: Bool { !(V.self is HiddenFromElementTree.Type) }
 
-    /// Called when the parent hands down a new value of the view.
-    func update(_ view: V, _ c: ResolveContext) {
+    /// Called when the parent hands down a new value of the view. Returns
+    /// false when nothing below changed.
+    ///
+    /// An `Equatable` view equal to the last one, and not invalidated by its
+    /// own dependencies, keeps its body (as SwiftUI does). If the environment
+    /// changed, its last body is handed down again so the views inside see
+    /// the new values; its own body runs again only if it reads `@Environment`.
+    func update(_ view: V, _ c: ResolveContext) -> Bool {
+        if let body, !isDirty, c.lazyItems == context.lazyItems, c.stackAxis == context.stackAxis,
+           let old = self.view as? any Equatable, old.isEqual(to: view) {
+            if c.environment.isSame(as: context.environment) {
+                context = c
+                return false
+            }
+            if !info.readsEnvironment {
+                context = c
+                setChild(0, body, innerContext)
+                return true
+            }
+        }
         self.view = view
         context = c
         evaluate()
+        return true
+    }
+
+    private var innerContext: ResolveContext {
+        var inner = context
+        inner.host = self
+        inner.depth += 1
+        return inner
     }
 
     func reevaluate() {
@@ -289,17 +337,15 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         isDirty = false
         let generation = invalidator.begin()
         epoch.bump()
-        if linked {
+        if info.linked {
             var linker = PropertyLinker(storages: storages, environment: context.environment)
             for p in linkedProperties(view) { p.link(&linker) }
             storages = linker.storages
         }
-        var inner = context
-        inner.host = self
-        inner.depth += 1
         context.tree.bodyEvaluations += 1
         let body = track(generation) { view.body }
-        setChild(0, body, inner)
+        if info.equatable { self.body = body }
+        setChild(0, body, innerContext)
     }
 
     func track<T>(_ body: () -> T) -> T { track(invalidator.generation, body) }

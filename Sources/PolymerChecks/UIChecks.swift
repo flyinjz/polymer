@@ -334,6 +334,59 @@ struct BindingScreen: View {
     }
 }
 
+@Observable
+final class EquatableModel {
+    var count = 0
+    var title = "First"
+    var other = 0
+    var font: Font
+    var limit: Int? = nil
+    init(font: Font) { self.font = font }
+}
+
+/// Equatable with nothing but plain values: synthesised `==`.
+struct EqualRow: View, Equatable {
+    let title: String
+    var body: some View { Text(title) }
+}
+
+/// Equatable and reads the environment: runs again when the environment changes.
+struct EnvRow: View, Equatable {
+    let title: String
+    @Environment(\.lineLimit) private var limit
+    nonisolated static func == (a: EnvRow, b: EnvRow) -> Bool { a.title == b.title }
+    var body: some View { Text("\(title) \(limit ?? 0)") }
+}
+
+/// Equatable and observes a model: runs again when what it read changes.
+struct ObservingRow: View, Equatable {
+    let model: EquatableModel
+    nonisolated static func == (a: ObservingRow, b: ObservingRow) -> Bool { a.model === b.model }
+    var body: some View { Text("Other \(model.other)") }
+}
+
+/// Not Equatable: runs whenever its parent does.
+struct PlainRow: View {
+    let title: String
+    var body: some View { Text(title) }
+}
+
+struct EquatableScreen: View {
+    let model: EquatableModel
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Count \(model.count)")
+            EqualRow(title: "Same")
+            EqualRow(title: model.title)
+            EnvRow(title: "Env")
+            PlainRow(title: "Plain")
+            ObservingRow(model: model)
+        }
+        .font(model.font)
+        .lineLimit(model.limit)
+    }
+}
+
 @MainActor let uiChecks: [Check] = [
     Check("ui.layout") { c in
         var r = ImageRenderer(content: try sampleAlbums(root: c.root))
@@ -418,6 +471,54 @@ struct BindingScreen: View {
         c.expect(tree.elementTree != before, "layout updated after a change")
         try Platform.files.createDirectory(Path.join(c.outputDirectory, "ui"))
         try Platform.files.write(PNG.encode(tree.render()), to: Path.join(c.outputDirectory, "ui/sample-counter.png"))
+    },
+    Check("ui.equatable") { c in
+        let face = try TextReference.font(root: c.root, "Geist-Regular.otf")
+        let model = EquatableModel(font: Font(face, size: 13))
+        let tree = ViewTree(EquatableScreen(model: model))
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 6, "every view once at first")
+
+        // The parent runs again: equal Equatable views keep their bodies; a plain view runs.
+        model.count += 1
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 8, "only the screen and the plain row ran")
+        c.expect(tree.elementTree.contains("\"Count 1\""), "the parent's own text changed")
+
+        // A changed value runs that view only.
+        model.title = "Second"
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 11, "the screen, the plain row and the one row whose value changed")
+        c.expect(tree.elementTree.contains("\"Second\"") && tree.elementTree.contains("\"Same\""), "new title shown, the other row kept")
+
+        // A new font from above reaches the text inside skipped views; only a view reading @Environment runs.
+        model.font = Font(face, size: 20)
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 14, "the screen, the plain row and the row that reads the environment")
+        // A view reading @Environment sees the new value.
+        model.limit = 2
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 17, "a changed environment value runs the view that reads it")
+        c.expect(tree.elementTree.contains("\"Env 2\""), "the environment reader shows the new value:\n\(tree.elementTree)")
+
+        // A view invalidated by its own dependencies runs once, even when its parent runs too.
+        model.other += 1
+        model.count += 1
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 20, "the observing row ran once, with the screen and the plain row")
+        c.expect(tree.elementTree.contains("\"Other 1\""), "the observing row shows its new value")
+
+        // Same result as building it all from scratch: frames, text and pixels.
+        let fresh = EquatableModel(font: Font(face, size: 20))
+        fresh.count = 2; fresh.title = "Second"; fresh.other = 1; fresh.limit = 2
+        let rebuilt = ViewTree(EquatableScreen(model: fresh))
+        c.expectEqual(tree.elementTree, rebuilt.elementTree, "skipped views look as if built anew")
+        c.expect(tree.render() == rebuilt.render(), "and draw the same pixels")
+
+        // Nothing changed: nothing runs.
+        tree.setRoot(EquatableScreen(model: model))
+        tree.update()
+        c.expectEqual(tree.bodyEvaluations, 22, "a new equal root value: the screen and the plain row only")
     },
     Check("ui.identity") { c in
         let model = ListModel()

@@ -150,6 +150,31 @@ Read this before changing `PolymerUI`.
   across its whole label area, a tap handler only where something is
   drawn.
 
+### Skipping unchanged views (session 4)
+
+- A view type that conforms to `Equatable` is compared with its last value
+  when its parent runs again (`HostNode.update`). Equal, not invalidated
+  by its own reads (`isDirty`), same environment: its body is not run and
+  nothing below it is touched (`reconcile` returns the node without
+  invalidating its layout).
+- **Environment.** `EnvironmentValues.isSame(as:)` compares every value;
+  custom values count as the same when `Equatable` and equal or the same
+  class instance, button styles also when of one type with no stored
+  properties. Anything else counts as changed (safe: the work is done). When
+  only the environment changed, the host hands its last body down again
+  with the new values, so text inside picks up a new font, without running
+  the body; the body runs only if the view has `@Environment` properties
+  (or nests a value that may, `LinksNestedProperties`).
+- The last body is kept only for `Equatable` views. Per-type facts
+  (properties to link, reads the environment, `Equatable`) are worked out
+  once per type (`ViewTypeInfo`).
+- With Swift 6 a hand-written `==` on a view must be `nonisolated` (views
+  are `@MainActor`), as with SwiftUI.
+- Non-`Equatable` views run whenever their parent does (SwiftUI also
+  compares those field by field; see DIFFERENCES.md).
+- Check: `ui.equatable` (counts with `bodyEvaluations`; after a font and
+  line-limit change the tree and pixels equal a tree built anew).
+
 ### How lazy stacks work (session 3)
 
 Read this before changing `LazyStacks.swift`.
@@ -324,8 +349,8 @@ side) to confirm the luminance rule between the two measured colours.
    identity, layout, text wrapping, buttons and clicks~~ done; next:
    ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
    and scroll physics, element names (stable paths for
-   Customize and for driving input), a focus ring, animation, skipping bodies of unchanged `Equatable`
-   views, ~~text cut to the height it is given~~ (done, session 4).
+   Customize and for driving input), a focus ring, animation, ~~skipping bodies of unchanged `Equatable`
+   views~~, ~~text cut to the height it is given~~ (both done, session 4).
 6. `PolymerDesign`: tokens, components, Customize and right-click menus.
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
    pacing, DWM glass. `ViewTree.onInvalidate` is where a window asks for
@@ -390,9 +415,11 @@ side) to confirm the luminance rule between the two measured colours.
   that do. DESIGN §5 says "no reflection" about start-up; this is noted
   here because it touches that sentence. The alternative (linking state on
   first read) loses state that a body never reads.
-- 2026-11-13 (Windows 2): no body is skipped yet when its view value is
+- 2026-11-13 (Windows 2): no body is skipped when its view value is
   unchanged; a parent's evaluation evaluates the views inside it. Fine
   grain comes from observation (a change reaches only the readers).
+  (Session 4: `Equatable` views are now skipped; see "Skipping unchanged
+  views".)
 - 2026-11-13 (Windows 2): text lines are spaced by the line height
   rounded up to whole pixels, each baseline on a pixel row, so wrapped
   lines are evenly spaced at any scale.
