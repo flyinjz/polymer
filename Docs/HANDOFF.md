@@ -54,7 +54,8 @@ Current state of the work. Every session updates this before it ends.
   - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
     if/else, optionals), `Group`, `ForEach` (by `id:` key path,
     `Identifiable`, or an index range), `.id(_:)`.
-  - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`),
+  - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`, cut
+    to the height it is offered with an ellipsis on the last line that fits),
     `Color`, `Rectangle`, `Spacer`, `Divider`, `HStack`, `VStack`,
     `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both).
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
@@ -324,7 +325,7 @@ side) to confirm the luminance rule between the two measured colours.
    ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
    and scroll physics, element names (stable paths for
    Customize and for driving input), a focus ring, animation, skipping bodies of unchanged `Equatable`
-   views, text cut to the height it is given.
+   views, ~~text cut to the height it is given~~ (done, session 4).
 6. `PolymerDesign`: tokens, components, Customize and right-click menus.
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
    pacing, DWM glass. `ViewTree.onInvalidate` is where a window asks for
@@ -401,6 +402,10 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): text offered too little height keeps the whole
+  lines that fit (never fewer than one) and ends the last in an ellipsis,
+  measured against its line height rounded to pixels; `lineLimit` and the
+  height together give the smaller count.
 - 2026-11-13 (Windows 2): the glyph cache keys on exact fractional
   positions rather than quantised ones, so nothing changes in the
   CoreText comparison. It empties itself when it reaches its limit (no

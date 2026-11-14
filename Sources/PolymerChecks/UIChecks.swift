@@ -704,5 +704,29 @@ struct BindingScreen: View {
         try Platform.files.write(PNG.encode(r.bitmap), to: Path.join(c.outputDirectory, "ui/text-wrapping@2x.png"))
         let centred = ImageRenderer(content: Text(text).font(font).lineLimit(2).multilineTextAlignment(.center).frame(width: 120))
         c.expectEqual(height(String(centred.elementTree.split(separator: "\n")[0])), height(single) * 2, "lineLimit(2) gives two lines")
+
+        // Offered less height than its lines need, text keeps the lines that fit and cuts the last.
+        let lh = Double(height(single))
+        func textLine(_ tree: String) -> String { tree.split(separator: "\n").first { $0.contains("Text (") }.map(String.init) ?? "" }
+        var short = ImageRenderer(content: Text(text).font(font).frame(width: 120, height: lh * 2.5))
+        c.expectEqual(height(textLine(short.elementTree)), Int(lh) * 2, "two and a half lines of height give two lines:\n\(short.elementTree)")
+        short.scale = 2
+        var limited2 = ImageRenderer(content: Text(text).font(font).lineLimit(2).frame(width: 120, height: lh * 2.5))
+        limited2.scale = 2
+        let cut = short.bitmap
+        c.expect(cut == limited2.bitmap, "cut to the height, the text draws as with lineLimit(2): ellipsis on the last line")
+        let tiny = ImageRenderer(content: Text(text).font(font).frame(width: 120, height: lh / 2))
+        c.expectEqual(height(textLine(tiny.elementTree)), Int(lh), "less than a line of height still shows one line")
+        let roomy = ImageRenderer(content: Text(text).font(font).frame(width: 120, height: lh * 20))
+        c.expectEqual(height(textLine(roomy.elementTree)), Int(lh) * wrapped.count, "enough height: every line")
+        let both = ImageRenderer(content: Text(text).font(font).lineLimit(1).frame(width: 120, height: lh * 3))
+        c.expectEqual(height(textLine(both.elementTree)), Int(lh), "the smaller of lineLimit and the height wins")
+        // In a stack of fixed height, the text gets what is left after its siblings.
+        let stacked = ImageRenderer(content: VStack(spacing: 0) {
+            Rectangle().frame(height: lh)
+            Text(text).font(font)
+        }.frame(width: 120, height: lh * 3))
+        c.expectEqual(height(textLine(stacked.elementTree)), Int(lh) * 2, "a stack's leftover height cuts the text:\n\(stacked.elementTree)")
+        try Platform.files.write(PNG.encode(cut), to: Path.join(c.outputDirectory, "ui/text-cut-to-height@2x.png"))
     },
 ]
