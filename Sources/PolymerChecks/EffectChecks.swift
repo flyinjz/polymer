@@ -309,4 +309,89 @@ func coverage(_ b: Bitmap, channel: Int = 0) -> Double {
         try Platform.files.createDirectory(Path.join(c.outputDirectory, "effects"))
         try Platform.files.write(PNG.encode(t.render(background: .black)), to: Path.join(c.outputDirectory, "effects/layers@2x.png"))
     },
+    Check("effects.glass-container") { c in
+        let photo = try JPEG.decode(try Platform.files.read(Path.join(c.root, "Tests/Fixtures/Images/progressive-mandel.jpg")))
+        let glass = Glass.clear
+        // Two circles `gap` points apart, in a container or not, over a photo.
+        @MainActor func circles(gap: Double, merged: Bool) -> ViewTree {
+            let pair = HStack(spacing: gap) {
+                Color.clear.frame(width: 60, height: 60).glassEffect(glass, in: Circle())
+                Color.clear.frame(width: 60, height: 60).glassEffect(glass, in: Circle())
+            }
+            let content = ZStack {
+                Image(photo).resizable().frame(width: 200, height: 120)
+                if merged { GlassEffectContainer(spacing: 16) { pair } } else { pair }
+            }
+            return ViewTree(content)
+        }
+        @MainActor func backdrops(_ t: ViewTree) -> Int {
+            (t.displayList?.items ?? []).filter { if case .backdrop = $0.operation { true } else { false } }.count
+        }
+        // Far apart: one merged item, drawn as the two circles alone would be (up to the numeric normal).
+        let apartMerged = circles(gap: 40, merged: true), apartPlain = circles(gap: 40, merged: false)
+        let a = apartMerged.render(background: .black), b = apartPlain.render(background: .black)
+        c.expectEqual(backdrops(apartMerged), 1, "a container draws one piece of glass")
+        c.expectEqual(backdrops(apartPlain), 2, "without it, two")
+        var worst = 0
+        for i in 0..<a.pixels.count { worst = max(worst, abs(Int(a.pixels[i]) - Int(b.pixels[i]))) }
+        // The merged outline's normals are estimated over a few pixels, so rims differ by a few levels.
+        c.expect(worst <= 6, "far apart, merged circles look like separate ones (largest difference \(worst))")
+
+        // Close together: the gap between them fills with glass.
+        let closeMerged = circles(gap: 4, merged: true), closePlain = circles(gap: 4, merged: false)
+        let m = closeMerged.render(background: .black), p = closePlain.render(background: .black)
+        // The middle of the gap: x = 100, y = 60 (circles centred at 68 and 132).
+        c.expect(m[100, 60] != p[100, 60], "between close shapes the merged glass covers the gap: \(m[100, 60]) vs \(p[100, 60])")
+        c.expect(m[100, 5] == p[100, 5], "far from both shapes nothing changes")
+        c.expect(closeMerged.elementTree.contains("GlassEffectContainer (") && closeMerged.elementTree.contains("spacing 16"),
+                 "the container is in the element tree")
+
+        // Partial redraws with merged glass equal whole draws while content moves behind it.
+        let model = CounterModel()
+        struct Moving: View {
+            let model: CounterModel
+            let photo: Bitmap
+            var body: some View {
+                ZStack {
+                    Image(photo).resizable().frame(width: 200, height: 120).offset(x: Double(model.count))
+                    GlassEffectContainer(spacing: 20) {
+                        HStack(spacing: 6) {
+                            Text("A").padding(12).glassEffect(.regular, in: Circle())
+                            Text("B").padding(12).glassEffect(.regular, in: Circle())
+                        }
+                    }
+                }
+                .frame(width: 200, height: 120)
+                .clipped()
+            }
+        }
+        let face = try TextReference.font(root: c.root, "Geist-Regular.otf")
+        var e = EnvironmentValues()
+        e.displayScale = 2
+        let t = ViewTree(Moving(model: model, photo: photo).font(Font(face, size: 13)), environment: e)
+        _ = t.render(background: .black)
+        for step in 1...3 {
+            model.count += 7 * step
+            let img = t.render(background: .black)
+            var whole = Canvas(width: img.width, height: img.height, scale: 2, background: .black)
+            if let l = t.displayList { whole.draw(l) }
+            c.expect(img == whole.bitmap, "partial frame with merged glass equals a whole draw (step \(step))")
+        }
+
+        // Showcase: three shapes melting together.
+        let show = ZStack {
+            Image(photo).resizable().frame(width: 320, height: 240)
+            GlassEffectContainer(spacing: 24) {
+                HStack(spacing: 8) {
+                    Color.clear.frame(width: 70, height: 70).glassEffect(.clear, in: Circle())
+                    Color.clear.frame(width: 110, height: 50).glassEffect(.clear, in: Capsule())
+                    Color.clear.frame(width: 50, height: 50).glassEffect(.clear, in: Circle())
+                }
+            }
+        }
+        var r = ImageRenderer(content: show)
+        r.scale = 2
+        try Platform.files.createDirectory(Path.join(c.outputDirectory, "effects"))
+        try Platform.files.write(PNG.encode(r.bitmap), to: Path.join(c.outputDirectory, "effects/glass-merging@2x.png"))
+    },
 ]

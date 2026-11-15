@@ -106,7 +106,7 @@ extension Canvas {
     /// (the region covers its reach), otherwise from the items before it
     /// drawn again offscreen, so a partial redraw matches a whole one.
     /// `from` is where the items it can see start (0, or the first item of the layer it is in).
-    mutating func drawBackdrop(_ list: DisplayList, _ itemIndex: Int, _ shape: RoundedRect, _ effect: BackdropEffect,
+    mutating func drawBackdrop(_ list: DisplayList, _ itemIndex: Int, _ shape: BackdropShape, _ effect: BackdropEffect,
                                region: PixelRect, from: Int) {
         let item = list.items[itemIndex]
         let target = item.bounds.clamped(to: clip)
@@ -131,8 +131,7 @@ extension Canvas {
 
         // The shape in pixels.
         let o = origin, s = scale
-        let px = RoundedRect(Rect(x: (shape.rect.minX + o.x) * s, y: (shape.rect.minY + o.y) * s,
-                                  width: shape.rect.width * s, height: shape.rect.height * s), cornerRadius: shape.cornerRadius * s)
+        let px = shape.inPixels(origin: o, scale: s)
 
         /// Bilinear sample of `seen` at pixel-space point (x, y) (pixel centres at +0.5).
         @inline(__always) func sample(_ x: Double, _ y: Double, _ ch: Int) -> Float {
@@ -146,11 +145,11 @@ extension Canvas {
             return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty
         }
 
-        let shortSide = min(px.rect.width, px.rect.height)
+        let halfThickness = px.halfThickness
         for y in target.y..<(target.y + target.height) {
             for x in target.x..<(target.x + target.width) {
                 let cx = Double(x) + 0.5, cy = Double(y) + 0.5
-                let d = px.signedDistance(cx, cy)
+                let d = px.distance(cx, cy)
                 let cov = Float(min(max(0.5 - d, 0), 1))
                 guard cov > 0 else { continue }
                 var r: Float, g: Float, b: Float, a: Float
@@ -163,11 +162,13 @@ extension Canvas {
                     tint = t
                 case .glass(let gs):
                     let depth = max(0, -d)
-                    let bezel = max(1, min(gs.bezel * s, shortSide / 2))
+                    let bezel = max(1, min(gs.bezel * s, halfThickness))
                     let u = min(depth / bezel, 1)
                     // A curved rim: content is pulled in from outside, most at the edge, none past the bezel.
-                    let m = gs.refraction * s * (1 - u) * (1 - u)
-                    let n = px.normal(cx, cy)
+                    // Merged shapes: the normal over a wider step, and less bending where the outline's
+                    // gradient is weak (the midline of a narrow neck), so joins have no crease.
+                    let (n, strength) = px.normalAndStrength(cx, cy, step: max(1, bezel / 4))
+                    let m = gs.refraction * s * (1 - u) * (1 - u) * strength
                     let mr = m * (1 + gs.dispersion), mb = m * (1 - gs.dispersion)
                     r = sample(cx + n.x * mr, cy + n.y * mr, 0)
                     g = sample(cx + n.x * m, cy + n.y * m, 1)
@@ -196,6 +197,91 @@ extension Canvas {
                 pixels[i + 2] = b * cov + pixels[i + 2] * (1 - cov)
                 pixels[i + 3] = a * cov + pixels[i + 3] * (1 - cov)
             }
+        }
+    }
+}
+
+/// The outline of a backdrop effect: one rounded rectangle, or several merged
+/// into one smooth outline (glass shapes in a `GlassEffectContainer`).
+public enum BackdropShape: Hashable, Sendable {
+    case single(RoundedRect)
+    /// Shapes closer than `smoothing` points flow into each other.
+    case union([RoundedRect], smoothing: Double)
+
+    /// A rectangle the shape lies within.
+    public var bounds: Rect {
+        switch self {
+        case .single(let r): return r.rect
+        case .union(let rs, let k):
+            guard var b = rs.first?.rect else { return .zero }
+            for r in rs.dropFirst() { b = b.union(r.rect) }
+            let grow = k / 4   // a smooth union reaches at most k/4 past the plain one
+            return Rect(x: b.minX - grow, y: b.minY - grow, width: b.width + 2 * grow, height: b.height + 2 * grow)
+        }
+    }
+
+    /// The same shape in pixels, for drawing at `scale` with `origin` added (points).
+    func inPixels(origin o: Point, scale s: Double) -> BackdropShape {
+        func px(_ r: RoundedRect) -> RoundedRect {
+            RoundedRect(Rect(x: (r.rect.minX + o.x) * s, y: (r.rect.minY + o.y) * s, width: r.rect.width * s, height: r.rect.height * s),
+                        cornerRadius: r.cornerRadius * s)
+        }
+        switch self {
+        case .single(let r): return .single(px(r))
+        case .union(let rs, let k): return .union(rs.map(px), smoothing: k * s)
+        }
+    }
+
+    /// Signed distance to the outline: negative inside.
+    func distance(_ x: Double, _ y: Double) -> Double {
+        switch self {
+        case .single(let r): return r.signedDistance(x, y)
+        case .union(let rs, let k):
+            var d = Double.infinity
+            for r in rs {
+                let e = r.signedDistance(x, y)
+                if d == .infinity || k <= 0 { d = min(d, e); continue }
+                // Polynomial smooth minimum.
+                let h = max(k - abs(d - e), 0) / k
+                d = min(d, e) - h * h * k / 4
+            }
+            return d
+        }
+    }
+
+    /// Outward unit normal of the outline near (x, y).
+    func normal(_ x: Double, _ y: Double) -> Point {
+        switch self {
+        case .single(let r): return r.normal(x, y)
+        case .union:
+            let h = 0.25
+            let gx = distance(x + h, y) - distance(x - h, y), gy = distance(x, y + h) - distance(x, y - h)
+            let l = (gx * gx + gy * gy).squareRoot()
+            return l > 1e-12 ? Point(x: gx / l, y: gy / l) : Point(x: 0, y: -1)
+        }
+    }
+
+    /// Half the thickness of the thickest part, limiting the rim's width.
+    var halfThickness: Double {
+        switch self {
+        case .single(let r): return min(r.rect.width, r.rect.height) / 2
+        case .union(let rs, _): return rs.map { min($0.rect.width, $0.rect.height) / 2 }.max() ?? 0
+        }
+    }
+}
+
+extension BackdropShape {
+    /// The outward normal and how sharply defined it is (1 on a clean edge,
+    /// less where the outline's distance field folds). Exact for one shape.
+    func normalAndStrength(_ x: Double, _ y: Double, step h: Double) -> (Point, Double) {
+        switch self {
+        case .single(let r): return (r.normal(x, y), 1)
+        case .union:
+            let gx = distance(x + h, y) - distance(x - h, y), gy = distance(x, y + h) - distance(x, y - h)
+            let l = (gx * gx + gy * gy).squareRoot()
+            guard l > 1e-12 else { return (Point(x: 0, y: -1), 0) }
+            let strength = min(l / (2 * h), 1)
+            return (Point(x: gx / l, y: gy / l), strength * strength)
         }
     }
 }

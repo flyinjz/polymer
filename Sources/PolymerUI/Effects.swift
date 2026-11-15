@@ -79,9 +79,11 @@ struct BackdropView<S: RoundedRectShape>: View, PrimitiveView {
         switch kind {
         case .glass(let g):
             n.effect = g.style.map { .glass($0) }
+            n.container = c.environment.glassContainer
             n.name = "Glass"; n.label = g.name
         case .material(let m):
             n.effect = .material(blur: m.blur, tint: m.tint)
+            n.container = nil
             n.name = "Material"; n.label = m.name
         }
         return n
@@ -93,6 +95,8 @@ final class BackdropNode: Node {
     var effect: BackdropEffect?
     var opaque = false
     var name = "Glass", label = ""
+    /// The `GlassEffectContainer` that draws this glass merged with its neighbours.
+    var container: GlassContainerRef?
 
     override var role: String { name }
     override var detail: String { opaque ? "\(label), opaque" : label }
@@ -100,6 +104,7 @@ final class BackdropNode: Node {
 
     override func draw(_ list: inout DisplayList) {
         guard let effect, list.isVisible(frame) else { return }
+        if !opaque, container?.node != nil { return }   // drawn by the container
         let shape = geometry(frame)
         if opaque {
             // Reduce transparency: an opaque fill of the shape, tinted as the effect would be.
@@ -169,5 +174,72 @@ final class LayerEffectNode: Node {
         if opacity <= 0 { return nil }
         if let mask, mask(frame).signedDistance(p.x, p.y) > 0 { return nil }
         return children[0].hitTest(p)
+    }
+}
+
+// MARK: GlassEffectContainer
+
+/// Glass shapes inside it are drawn as one piece of glass: shapes closer than
+/// `spacing` points flow into each other (a smooth union of their outlines).
+public struct GlassEffectContainer<Content: View>: View, PrimitiveView {
+    let spacing: Double?
+    let content: Content
+    public init(spacing: Double? = nil, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing; self.content = content()
+    }
+    public var body: Never { fatalError("GlassEffectContainer is a built-in view") }
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? GlassContainerNode) ?? GlassContainerNode()
+        n.spacing = spacing ?? 16
+        var c = c
+        c.environment.glassContainer = n.ref
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+/// How glass views find their container (weak, so nothing is kept alive by the environment).
+final class GlassContainerRef {
+    weak var node: GlassContainerNode?
+}
+
+struct GlassContainerKey: EnvironmentKey { static var defaultValue: GlassContainerRef? { nil } }
+
+extension EnvironmentValues {
+    var glassContainer: GlassContainerRef? {
+        get { self[GlassContainerKey.self] }
+        set { self[GlassContainerKey.self] = newValue }
+    }
+}
+
+final class GlassContainerNode: Node {
+    var spacing = 16.0
+    let ref = GlassContainerRef()
+    override init() { super.init(); ref.node = self }
+
+    override var role: String { "GlassEffectContainer" }
+    override var detail: String { "spacing \(spacing == spacing.rounded() ? String(Int(spacing)) : String(spacing))" }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+
+    override func draw(_ list: inout DisplayList) {
+        // The glass of the views inside, where they draw (moved by any scroll view in between).
+        var shapes: [RoundedRect] = []
+        var style: GlassStyle?
+        func collect(_ n: Node, _ shift: Point) {
+            if let b = n as? BackdropNode, b.container === ref, !b.opaque, case .glass(let g)? = b.effect {
+                let r = b.geometry(b.frame)
+                shapes.append(RoundedRect(r.rect.offsetBy(dx: shift.x, dy: shift.y), cornerRadius: r.cornerRadius))
+                if style == nil { style = g }
+            }
+            let inner = shift + n.contentShift
+            for c in n.children { collect(c, inner) }
+        }
+        collect(children[0], .zero)
+        if let style, !shapes.isEmpty {
+            list.drawBackdrop(shapes.count == 1 ? .single(shapes[0]) : .union(shapes, smoothing: spacing), .glass(style))
+        }
+        children[0].draw(&list)
     }
 }

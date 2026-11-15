@@ -197,3 +197,25 @@ final class ClipNode: Node {
     }
     override func hitTest(_ p: Point) -> Node? { frame.contains(p) ? children[0].hitTest(p) : nil }
 }
+
+extension View {
+    /// Moves the view by (x, y) points without changing the layout around it.
+    public func offset(x: Double = 0, y: Double = 0) -> some View { OffsetView(content: self, dx: x, dy: y) }
+}
+
+struct OffsetView<Content: View>: View, PrimitiveView {
+    let content: Content, dx: Double, dy: Double
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? OffsetNode) ?? OffsetNode()
+        if n.dx != dx || n.dy != dy { n.dx = dx; n.dy = dy; n.invalidateLayout() }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class OffsetNode: Node {
+    var dx = 0.0, dy = 0.0
+    override var isElement: Bool { false }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r.offsetBy(dx: dx, dy: dy)) }
+}

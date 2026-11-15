@@ -22,7 +22,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (34 checks: base, text, render, ui, effects).
+  passes (35 checks: base, text, render, ui, effects).
 
 ### Done
 
@@ -108,7 +108,8 @@ Current state of the work. Every session updates this before it ends.
     `@Environment` and `@State` (`LinksNestedProperties`).
   - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
     `glassEffect`, `background(_ material:in:)`, `opacity`, `clipShape`,
-    `blur(radius:)` (layers, session 4),
+    `blur(radius:)` (layers, session 4), `offset(x:y:)`,
+    `GlassEffectContainer` (session 4),
     `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -276,8 +277,16 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   has `reach`, so damage spreads through it like an effect. `.opacity(0)`
   records nothing and isn't clickable; `.clipShape` clicks miss outside the
   shape. Check: `effects.layers`.
-- Next: GPU versions, `GlassEffectContainer` (smooth union of distance
-  fields), `interactive()`,
+- **Merging glass.** `GlassEffectContainer(spacing:)` puts a weak reference
+  to itself in the environment; glass views inside skip drawing and the
+  container records one backdrop with `BackdropShape.union` (a polynomial
+  smooth minimum of the shapes' distances, k = spacing) behind its content,
+  in the first glass's style. A merged outline's normal is a central
+  difference over a quarter of the bezel, and refraction fades where that
+  gradient is weak (the midline of a narrow neck), which removes the crease
+  a sharp normal leaves at joins. Check: `effects.glass-container`.
+- Next: GPU versions, glass with different styles in one container
+  (today the first one's style is used), `interactive()`,
   shadows if the design system wants them, speed (the CPU blur is
   direct; a box-filter approximation or downsampling for large radii).
 
@@ -509,7 +518,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (34 checks) as of Windows session 4.
+  in debug. Both pass (35 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 

@@ -16,7 +16,7 @@ public struct DisplayItem: Hashable {
         /// An image stretched to a rectangle in points (corners rounded to whole pixels).
         case image(RasterImage, Rect)
         /// A backdrop effect inside a rounded rectangle in points (DESIGN section 11).
-        case backdrop(RoundedRect, BackdropEffect)
+        case backdrop(BackdropShape, BackdropEffect)
         /// The items up to the matching `endLayer` are drawn apart, then composited with the effect.
         case beginLayer(LayerEffect)
         case endLayer
@@ -182,9 +182,13 @@ public struct DisplayList {
     }
 
     /// Records a backdrop effect inside `shape` (points): it filters what was recorded before it.
-    public mutating func drawBackdrop(_ shape: RoundedRect, _ effect: BackdropEffect) {
-        guard shape.rect.width > 0, shape.rect.height > 0 else { return }
-        add(.backdrop(shape, effect), PixelRect.covering(shape.rect, origin: origin, scale: scale), reach: effect.reach(scale: scale))
+    public mutating func drawBackdrop(_ shape: RoundedRect, _ effect: BackdropEffect) { drawBackdrop(.single(shape), effect) }
+
+    /// Records a backdrop effect inside a shape that may be several merged into one.
+    public mutating func drawBackdrop(_ shape: BackdropShape, _ effect: BackdropEffect) {
+        let b = shape.bounds
+        guard b.width > 0, b.height > 0 else { return }
+        add(.backdrop(shape, effect), PixelRect.covering(b, origin: origin, scale: scale), reach: effect.reach(scale: scale))
     }
 
     private mutating func add(_ op: DisplayItem.Operation, _ extent: PixelRect, reach: Int = 0) {
