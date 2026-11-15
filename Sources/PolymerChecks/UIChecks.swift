@@ -1078,4 +1078,4 @@ struct GridScreen: View {
         try Platform.files.createDirectory(Path.join(c.outputDirectory, "ui"))
         try Platform.files.write(PNG.encode(tree.render(background: .black)), to: Path.join(c.outputDirectory, "ui/grid@2x.png"))
     },
-]
+] + layoutChecks

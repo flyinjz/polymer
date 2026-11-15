@@ -17,6 +17,8 @@ public final class ViewTree {
     private var pointer: Point?
     /// The button or tap handler the pointer went down on.
     private weak var pressedNode: Node?
+    /// The drag gesture following the pointer while it is down.
+    private weak var dragNode: DragGestureNode?
     /// The last frame: what it drew, its pixels and background.
     private var lastList: DisplayList?
     private var spareList: DisplayList?
@@ -195,6 +197,7 @@ public final class ViewTree {
     public func pointerMoved(to point: Point) {
         update()
         pointer = point
+        if let d = dragNode, d.pointerMoved(to: point, time: state.now) { cancelPress() }
         if let b = pressedNode as? TapNode, b.isButton { setPressed(b, b.isUnderPointer(point)) }
         state.updateHover(point)
     }
@@ -232,6 +235,14 @@ public final class ViewTree {
         if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
         // Interactive glass answers the press without taking it.
         state.pressInteractiveGlass(at: point)
+        // The nearest drag gesture around what was hit follows the press; once it moves far enough the press is its.
+        dragNode = nil
+        n = hit
+        while let node = n {
+            if let d = node as? DragGestureNode, d.isEnabled { dragNode = d; break }
+            n = node.parent
+        }
+        if let d = dragNode, d.pointerDown(at: point, time: state.now) { cancelPress() }
         return focusMoved
     }
 
@@ -241,6 +252,10 @@ public final class ViewTree {
     public func pointerUp(at point: Point) -> Bool {
         if pointer != point { pointerMoved(to: point) }
         state.pressInteractiveGlass(at: nil)
+        if let d = dragNode {
+            dragNode = nil
+            if d.pointerUp(at: point, time: state.now) { pressedNode = nil; return true }
+        }
         guard let node = pressedNode else { return false }
         pressedNode = nil
         let b = node as? TapNode
@@ -255,6 +270,28 @@ public final class ViewTree {
         guard over, node.isMounted, let action = node.tapAction else { return false }
         action()
         return true
+    }
+
+    /// Presses at `start`, moves to `end` in `steps` even steps, and lets go:
+    /// what a person dragging does. Time is not advanced (set `time` between
+    /// calls for a drag with a speed). Returns true when the release ended a
+    /// drag gesture or ran a button or tap handler.
+    @discardableResult
+    public func drag(from start: Point, to end: Point, steps: Int = 4) -> Bool {
+        pointerMoved(to: start)
+        pointerDown(at: start)
+        let n = max(1, steps)
+        for k in 1...n {
+            let t = Double(k) / Double(n)
+            pointerMoved(to: Point(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+        }
+        return pointerUp(at: end)
+    }
+
+    /// A drag took the press: the button or tap handler under it will not run.
+    private func cancelPress() {
+        if let b = pressedNode as? TapNode, b.isButton { setPressed(b, false) }
+        pressedNode = nil
     }
 
     private func setPressed(_ b: TapNode, _ down: Bool) {

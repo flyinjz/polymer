@@ -92,6 +92,32 @@ Current state of the work. Every session updates this before it ends.
     fitting as many columns of its minimum as it can (`gridTracks`). Check:
     `ui.grid` (sizes, cell order, 10,000 album cells building only the rows
     in view, state kept across scrolling, partial frames equal whole draws).
+  - `Grid`, `GridRow`, `.gridCellColumns` (Agent B, session 5;
+    `Grid.swift`): not lazy. Rows are the grid's flattened content; a
+    `GridRowNode`'s flattened content are its cells (a `GridSpanNode` says
+    how many columns one spans). Column widths: unoffered, the widest
+    single-column cell; offered a width, the stack rule (columns sorted by
+    flexibility, each measured at an even share of what is left, a column's
+    width being its widest cell at that width); spanning cells then widen
+    their columns evenly if they need more. Rows the same way vertically.
+    Cells sit in their slot by the grid's alignment (a row's own vertical
+    alignment wins). Check: `ui.grid-plain` (positions, spans, a row across
+    the grid, flexible columns, same pixels as cells placed by hand).
+  - `GeometryReader` (Agent B, session 5; `GeometryReader.swift`): takes
+    the proposal (10x10 when none); the content closure runs during
+    `placeChildren` with a `GeometryProxy` (size, global frame) whenever the
+    proxy differs from the last one, and at resolve time with the last
+    proxy (tracked through the host, like `ForEach`). Check: `ui.geometry`.
+  - `DragGesture` (Agent B, session 5; `Gestures.swift`): `.gesture(_:)`
+    makes a `DragGestureNode` (pass-through). `pointerDown` remembers the
+    nearest enabled one above the hit node; `pointerMoved` feeds it; once
+    it has moved `minimumDistance` it calls `onChanged` and the press is
+    cancelled (`cancelPress`); `pointerUp` calls `onEnded` and no tap runs.
+    Locations are in the view's coordinates (`screenFrame` origin) or
+    global. Velocity from the samples of the last 0.1 s of `ViewTree.time`.
+    `ViewTree.drag(from:to:steps:)` for headless use (a `--drag` option for
+    the `polymer` command is for whoever next edits PolymerTools). Check:
+    `ui.drag`.
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
@@ -632,7 +658,7 @@ side) to confirm the luminance rule between the two measured colours.
    ~~lazy stacks~~, ~~lazy grids~~, ~~images~~ and ~~keyboard and focus~~
    (done), effects (blur, materials, liquid glass on the CPU: session 4;
    GPU, merging glass, interactive glass and `.blur` on layers to come,
-   DESIGN 11.6), `Grid` (not lazy), scroll bars
+   DESIGN 11.6), ~~`Grid` (not lazy), `GeometryReader`, drag gestures~~ (session 5), scroll bars
    and scroll physics, element names (stable paths for
    Customize and for driving input), a focus ring, ~~animation~~ (frames,
    opacity, colours; session 4; transitions and spring velocity, session 5), ~~skipping bodies of unchanged `Equatable`
