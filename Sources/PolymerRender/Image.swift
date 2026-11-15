@@ -21,6 +21,19 @@ public struct Bitmap: Hashable, Sendable {
         self.width = width; self.height = height; self.pixels = pixels
     }
 
+    /// From premultiplied, sRGB-encoded float RGBA (a canvas or a GPU target read back).
+    public init(premultiplied p: [Float], width: Int, height: Int) {
+        precondition(p.count == width * height * 4, "Bitmap needs width * height * 4 values")
+        var out = [UInt8](repeating: 0, count: p.count)
+        for i in stride(from: 0, to: p.count, by: 4) {
+            let a = p[i + 3]
+            let inv: Float = a > 0 ? 1 / a : 0
+            for c in 0..<3 { out[i + c] = UInt8(min(max(p[i + c] * inv * 255 + 0.5, 0), 255)) }
+            out[i + 3] = UInt8(min(max(a * 255 + 0.5, 0), 255))
+        }
+        self.init(width: width, height: height, pixels: out)
+    }
+
     @inlinable public subscript(x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8) {
         let i = (y * width + x) * 4
         return (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3])

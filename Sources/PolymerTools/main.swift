@@ -6,7 +6,10 @@ import PolymerRender
 import PolymerUI
 #if os(Windows)
 import PolymerPlatformWindows
+import PolymerGPU
+import PolymerGPUD3D12
 Platform.install(files: WindowsFileSystem(), process: WindowsProcess())
+GPU.install(D3D12Backend.make)
 #elseif os(macOS)
 import PolymerPlatformMac
 Platform.install(files: MacFileSystem(), process: MacProcess())

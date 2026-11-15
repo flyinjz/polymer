@@ -273,14 +273,5 @@ public struct Canvas {
     }
 
     /// 8-bit sRGB, straight alpha.
-    public var bitmap: Bitmap {
-        var out = [UInt8](repeating: 0, count: width * height * 4)
-        for i in stride(from: 0, to: pixels.count, by: 4) {
-            let a = pixels[i + 3]
-            let inv: Float = a > 0 ? 1 / a : 0
-            for c in 0..<3 { out[i + c] = UInt8(min(max(pixels[i + c] * inv * 255 + 0.5, 0), 255)) }
-            out[i + 3] = UInt8(min(max(a * 255 + 0.5, 0), 255))
-        }
-        return Bitmap(width: width, height: height, pixels: out)
-    }
+    public var bitmap: Bitmap { Bitmap(premultiplied: pixels, width: width, height: height) }
 }

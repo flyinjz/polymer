@@ -65,6 +65,9 @@ Current state of the work. Every session updates this before it ends.
   Not yet: EXIF orientation, decoding at 1/2, 1/4, 1/8 size (libjpeg's
   scaled IDCT, for thumbnails), arithmetic coding, 12-bit. CMYK and YCCK
   follow the Adobe convention (inverted) but have no reference fixture yet.
+- `PolymerGPU` (session 5): the GPU renderer, shared, and `PolymerGPUD3D12`
+  (Direct3D 12, offscreen, hardware or WARP). Draws display lists to match
+  the CPU canvas within 1/255; see "GPU renderer" below.
 - `PolymerUI`:
   - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
     if/else, optionals), `Group`, `ForEach` (by `id:` key path,
@@ -310,6 +313,46 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   (today the first one's style is used),
   shadows if the design system wants them, speed (the CPU blur is
   direct; a box-filter approximation or downsampling for large radii).
+
+### GPU renderer (session 5)
+
+- **Shape.** `PolymerGPU/GPU.swift` is the whole backend interface:
+  `GPUBackend` makes textures (`rgba16Float` targets, `rgba8` images, `r8`
+  masks), runs a `GPUBatch` and reads a target back. A batch is uploads,
+  then commands in order: clear, copy, draw. Every draw is instanced quads
+  (`GPUInstance`, six float4s) with one of six programs (`GPUProgram`: rect
+  coverage, atlas mask, image, one blur pass, backdrop, layer composite).
+  The entry point installs the backend (`GPU.install(D3D12Backend.make)`),
+  as with `Platform.install`. Metal will implement the same protocol.
+- **GPURenderer** (shared) walks the display list exactly as
+  `Canvas.draw(_:in:range:)`: the same clips, the same offscreen areas for
+  layers and backdrops (copied from the target when the region covers the
+  reach, else the items before drawn again), the same blur weights
+  (`Blur.kernel`), glyph and path coverage from our rasteriser packed into a
+  2048x2048 r8 atlas (emptied when full), images resampled on the CPU by
+  `RasterImage` and kept as textures (dropped after 120 unused frames).
+  Scratch targets come from a pool. Consecutive quads with the same program,
+  target, clip and texture are one draw. `draw(list, into:, regions:)` clears
+  and draws only the damage.
+- **D3D12 backend.** HLSL in `Shaders.swift` (the CPU maths, compiled at
+  start with D3DCompile, IEEE strict); one root signature (8 constants,
+  instances and data as root SRVs, one texture table); premultiplied
+  source-over, dual-source blending for backdrops (colour times coverage
+  plus target times one minus coverage); textures track their state for
+  barriers. Each `execute` submits and waits (simple and safe; frames in
+  flight come with the window). Never opens a window.
+- **Check** `render.gpu`: a scene with everything (fractional rects, a path,
+  text, an image, opacity/mask/blur layers, material, glass, merged glass
+  with dispersion, a backdrop in a layer) and the glass sample screen, on
+  the system GPU and on WARP, against the CPU: tolerance in `GPUTolerance`
+  (mean 0.1, 0.1% of values over 2, max 4; measured max 1, mean 0.035).
+  A redraw of only the damage equals a whole draw. Images:
+  `out/checks/gpu/` (CPU, GPU, difference x8).
+- **Speed** (release, RTX 5070): the test scene (480x320) 1.9 ms per frame
+  including CPU encoding, submit and wait; WARP about 50 ms.
+- Next: frames in flight (no wait per batch), compiled shaders cached,
+  a downsampled blur for large radii, glyph masks of the same glyph at
+  nearby fractions shared if the atlas churns, the Metal backend.
 
 ### Animation (session 4)
 

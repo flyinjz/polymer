@@ -60,7 +60,7 @@ public struct Check {
 @MainActor
 public enum Checks {
     /// Every check, grouped by module, in dependency order.
-    public static var all: [Check] { baseChecks + textChecks + renderChecks + uiChecks + animationChecks + effectChecks }
+    public static var all: [Check] { baseChecks + textChecks + renderChecks + uiChecks + animationChecks + effectChecks + gpuChecks }
 
     /// Runs the checks whose name contains `filter`; returns the number that failed.
     public static func run(filter: String?, root: String, verbose: Bool) -> Int {

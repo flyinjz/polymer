@@ -27,6 +27,10 @@ let package = Package(
         // Images (PNG), display lists and the CPU reference renderer.
         .target(name: "PolymerRender", dependencies: ["PolymerBase", "PolymerText"]),
 
+        // The GPU renderer (shared) and its backends. Backends are the only place `#if os(...)` is allowed.
+        .target(name: "PolymerGPU", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
+        .target(name: "PolymerGPUD3D12", dependencies: ["PolymerBase", "PolymerGPU"]),
+
         // Views, layout and state.
         .target(name: "PolymerUI", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
 
@@ -34,13 +38,14 @@ let package = Package(
         .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI"]),
 
         // Checks run by `polymer check`, headless, the same on every OS.
-        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI"]),
+        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI"]),
 
         // The `polymer` command.
         .executableTarget(
             name: "PolymerTools",
             dependencies: [
-                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerChecks",
+                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerChecks",
+                .target(name: "PolymerGPUD3D12", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),
             ]
