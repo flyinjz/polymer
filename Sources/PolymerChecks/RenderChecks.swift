@@ -3,6 +3,54 @@ import PolymerPlatform
 import PolymerRender
 
 @MainActor let renderChecks: [Check] = [
+    Check("render.jpeg") { c in
+        let dir = Path.join(c.root, "Tests/Fixtures/Images")
+        let cases = ["baseline-420", "baseline-422", "baseline-444", "baseline-440", "baseline-411", "grey", "rgb",
+                     "restart-optimized", "coarse-16bit-tables", "progressive-420", "progressive-444-restart", "progressive-mandel"]
+        let clock = ContinuousClock()
+        for name in cases {
+            let data = try Platform.files.read(Path.join(dir, name + ".jpg"))
+            let reference = try PNG.decode(try Platform.files.read(Path.join(dir, name + ".png")))
+            let ours: Bitmap
+            do { ours = try JPEG.decode(data) } catch { c.fail("\(name): \(error)"); continue }
+            guard ours.width == reference.width, ours.height == reference.height else {
+                c.fail("\(name): \(ours.width)x\(ours.height), expected \(reference.width)x\(reference.height)"); continue
+            }
+            // Exact match with libjpeg-turbo; on failure, say how far off and where.
+            var differing = 0, worst = 0, first: (Int, Int)? = nil
+            for y in 0..<ours.height {
+                for x in 0..<ours.width {
+                    let a = ours[x, y], b = reference[x, y]
+                    let d = max(abs(Int(a.r) - Int(b.r)), abs(Int(a.g) - Int(b.g)), abs(Int(a.b) - Int(b.b)), abs(Int(a.a) - Int(b.a)))
+                    if d > 0 { differing += 1; worst = max(worst, d); if first == nil { first = (x, y) } }
+                }
+            }
+            c.expect(differing == 0, "\(name): \(differing) pixels differ from libjpeg-turbo, by up to \(worst), first at \(first.map { "\($0.0),\($0.1)" } ?? "")")
+        }
+        do {
+            _ = try JPEG.decode(try Platform.files.read(Path.join(dir, "arithmetic.jpg")))
+            c.fail("an arithmetic-coded file must be refused")
+        } catch {
+            c.expect("\(error)".contains("arithmetic"), "the error names the reason: \(error)")
+        }
+        c.expect((try? JPEG.decode([0xFF, 0xD8, 0xFF, 0xC0, 0, 4])) == nil, "a cut-off header is an error, not a crash")
+        // A file cut in the middle of its data still decodes (zeros after the cut), as in libjpeg.
+        let full = try Platform.files.read(Path.join(dir, "baseline-420.jpg"))
+        do {
+            let cut = try JPEG.decode(Array(full[0..<(full.count * 2 / 3)]))
+            c.expect(cut.width == 98 && cut.height == 66, "a truncated file gives a whole-size image")
+            let whole = try JPEG.decode(full)
+            c.expect(cut.pixels[0..<(98 * 4 * 8)] == whole.pixels[0..<(98 * 4 * 8)], "its first rows are the same as the whole file's")
+        } catch {
+            c.fail("a truncated file gives a partial image, not: \(error)")
+        }
+
+        // Speed, for the record: the largest fixture.
+        let mandel = try Platform.files.read(Path.join(dir, "progressive-mandel.jpg"))
+        let start = clock.now
+        for _ in 0..<10 { _ = try JPEG.decode(mandel) }
+        c.note("progressive 320x240: \((clock.now - start).seconds * 100) ms per decode")
+    },
     Check("render.png") { c in
         var b = Bitmap(width: 37, height: 11)
         for i in 0..<b.pixels.count { b.pixels[i] = UInt8(truncatingIfNeeded: i &* 31 &+ i / 7) }

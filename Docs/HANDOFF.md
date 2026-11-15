@@ -50,7 +50,15 @@ Current state of the work. Every session updates this before it ends.
     the exact fractional pixel offset (same pixels cached or not).
 - `PolymerRender`: `Bitmap`, PNG decode/encode (our own), `Canvas` (CPU
   reference renderer: rects, paths, glyph runs, rectangular clipping),
-  `DisplayList` with damage (session 4; see "Display list and damage").
+  `DisplayList` with damage (session 4; see "Display list and damage"),
+  JPEG decoding (session 4): baseline and progressive, any sampling,
+  restarts, grey/YCbCr/RGB/CMYK/YCCK; pixels identical to libjpeg-turbo's
+  default output (same integer IDCT, fancy upsampling and colour tables),
+  checked against `djpeg` decodes in `Tests/Fixtures/Images` (`render.jpeg`).
+  About 1.3 ms for a 320x240 progressive file in release (no SIMD yet).
+  Not yet: EXIF orientation, decoding at 1/2, 1/4, 1/8 size (libjpeg's
+  scaled IDCT, for thumbnails), arithmetic coding, 12-bit. CMYK and YCCK
+  follow the Adobe convention (inverted) but have no reference fixture yet.
 - `PolymerUI`:
   - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
     if/else, optionals), `Group`, `ForEach` (by `id:` key path,
@@ -465,6 +473,11 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): the JPEG decoder matches libjpeg-turbo bit for
+  bit rather than just "closely": the same integer IDCT and upsampling, so
+  a check can compare exactly, and album art looks the same as in apps
+  built on libjpeg. Test images are synthetic (ffmpeg patterns), encoded
+  and decoded with the MSYS2 libjpeg-turbo tools; see the fixtures README.
 - 2026-11-14 (Windows 4): views record a display list instead of drawing
   into a canvas; the CPU canvas replays it. One drawing path for the CPU
   reference, damage and the coming GPU renderer. Damage matching is
