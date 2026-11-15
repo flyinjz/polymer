@@ -22,7 +22,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (35 checks: base, text, render, ui, effects).
+  passes (36 checks: base, text, render, ui, effects).
 
 ### Done
 
@@ -109,7 +109,8 @@ Current state of the work. Every session updates this before it ends.
   - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
     `glassEffect`, `background(_ material:in:)`, `opacity`, `clipShape`,
     `blur(radius:)` (layers, session 4), `offset(x:y:)`,
-    `GlassEffectContainer` (session 4),
+    `GlassEffectContainer` (session 4), `animation(_:value:)` and
+    `withAnimation` (session 4; see "Animation"),
     `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -124,7 +125,7 @@ Current state of the work. Every session updates this before it ends.
     window uses to schedule a frame; `bodyEvaluations` counts work for
     checks.
   - `ImageRenderer` (SwiftUI's name) for one-shot images and trees.
-  - Not yet: scroll bars, animation, element names, pressed looks for
+  - Not yet: scroll bars, transitions (insert and remove), element names, pressed looks for
     tap gestures, a focus ring (a PolymerDesign look), scrolling the focused view
     into view.
 - `polymer` command: `check [filter] [--list] [--verbose]`,
@@ -291,6 +292,38 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   (today the first one's style is used), `interactive()`,
   shadows if the design system wants them, speed (the CPU blur is
   direct; a box-filter approximation or downsampling for large radii).
+
+### Animation (session 4)
+
+- **API** (`Animation.swift`): `Animation` (`.linear`, `.easeIn`, `.easeOut`,
+  `.easeInOut` with or without `duration:`, `.spring(response:dampingFraction:)`,
+  `.default` = a spring of 0.55 s that doesn't overshoot), `withAnimation`,
+  `.animation(_:value:)`. Bézier curves are solved by Newton then bisection;
+  springs are the closed-form damped oscillator (damping above 1 is treated
+  as 1), finished when within 0.1%. Only `Math` and basic arithmetic.
+- **Time** is `ViewTree.time` (seconds), set by the window per frame or by
+  checks; `ViewTree.isAnimating` says whether to keep drawing.
+- **Transactions.** `withAnimation` sets `Transaction.current` (a `Mutex`)
+  while its body runs; an invalidation queued then carries the animation,
+  and `updateOnce` makes the first one it finds `TreeState.passAnimation`
+  for the whole update (cleared after layout). `.animation(_:value:)` puts
+  its animation in `ResolveContext.animation` when the value changed;
+  `reconcile` stamps nodes with it and the pass number (before resolving an
+  existing node, so its own changes can animate).
+- **What animates.** `Animated<T: Interpolatable>` keeps target, start
+  value, start time and animation; a change with an animation starts from
+  the value shown now (so interruptions are smooth in position, not in
+  speed). `Node.frame` is now the shown frame; `layoutFrame` is where
+  layout put it. Animated: frames (`Node.place`), `.opacity`
+  (`LayerEffectNode`), `Color` fills (`FillNode`). New nodes never animate.
+  Text keeps its final line breaks and moves with its frame's centre.
+  Hit testing and the element tree use the shown frames.
+- Check: `ui.animation` (curves, a frame half way, interruption, no
+  animation without a transaction, opacity and colour, `.animation(value:)`,
+  spring overshoot, partial frames equal whole draws while animating).
+- Next: transitions (insertion and removal), animating `Shape` fills, text
+  colour, offsets and scroll positions; velocity carried across
+  interruptions; `interactive()` glass on top of this.
 
 ### Skipping unchanged views (session 4)
 
@@ -495,7 +528,8 @@ side) to confirm the luminance rule between the two measured colours.
    GPU, merging glass, interactive glass and `.blur` on layers to come,
    DESIGN 11.6), `Grid` (not lazy), scroll bars
    and scroll physics, element names (stable paths for
-   Customize and for driving input), a focus ring, animation, ~~skipping bodies of unchanged `Equatable`
+   Customize and for driving input), a focus ring, ~~animation~~ (frames,
+   opacity, colours; session 4; transitions next), ~~skipping bodies of unchanged `Equatable`
    views~~, ~~text cut to the height it is given~~ (both done, session 4).
 6. `PolymerDesign`: tokens, components, Customize and right-click menus.
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
@@ -520,7 +554,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (35 checks) as of Windows session 4.
+  in debug. Both pass (36 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 

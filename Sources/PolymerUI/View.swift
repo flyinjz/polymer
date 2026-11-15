@@ -32,6 +32,8 @@ extension PrimitiveView {
 @MainActor
 func reconcile<V: View>(_ view: V, _ existing: Node?, _ c: ResolveContext) -> Node {
     let node: Node
+    // An existing node learns this pass's animation before it updates, so its changes can animate.
+    if let e = existing { e.tree = c.tree; e.resolveAnimation = c.animation; e.resolvePass = c.tree.pass }
     if let p = view as? PrimitiveView {
         node = p.resolve(existing, c)
     } else if let host = existing as? HostNode<V> {
@@ -44,6 +46,9 @@ func reconcile<V: View>(_ view: V, _ existing: Node?, _ c: ResolveContext) -> No
         node = host
     }
     node.scale = c.environment.displayScale
+    node.tree = c.tree
+    node.resolveAnimation = c.animation
+    node.resolvePass = c.tree.pass
     node.invalidateLayout()
     return node
 }
@@ -61,6 +66,8 @@ struct ResolveContext {
     var depth = 0
     /// True when the view is an item of a lazy stack: a `ForEach` here builds its elements only when they come into view.
     var lazyItems = false
+    /// The animation for changes made while resolving here (`.animation(_:value:)`).
+    var animation: Animation?
 }
 
 public enum Axis: Sendable { case horizontal, vertical }

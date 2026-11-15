@@ -79,6 +79,9 @@ final class TextNode: Node {
     }
 
     override func draw(_ list: inout DisplayList) {
+        // While the frame animates, the text keeps its final lines and size and moves with the frame's centre.
+        let shown = frame, laid = layoutFrame
+        let frame = Rect(x: shown.midX - laid.width / 2, y: shown.midY - laid.height / 2, width: laid.width, height: laid.height)
         guard let font, list.isVisible(frame) else { return }
         let ls = lines(font, width: frame.width, height: frame.height)
         let lh = lineHeight(font)
@@ -106,7 +109,13 @@ extension Color: View, PrimitiveView {
 }
 
 final class FillNode: Node {
-    var color: Color = .clear
+    private var animatedColor = Animated(Color.clear)
+    /// The colour set by the view (the target while it animates).
+    var color: Color {
+        get { animatedColor.target }
+        set { change(&animatedColor, to: newValue) }
+    }
+    override func isAnimating(at now: Double) -> Bool { super.isAnimating(at: now) || animatedColor.isRunning(at: now) }
     var name = "Color"
     override var role: String { name }
     override var detail: String { color.description }
@@ -115,7 +124,9 @@ final class FillNode: Node {
         // SwiftUI shapes take 10 points when given no size.
         p.replacingUnspecified(Size(width: 10, height: 10))
     }
-    override func draw(_ list: inout DisplayList) { if list.isVisible(frame) { list.fill(frame, color) } }
+    override func draw(_ list: inout DisplayList) {
+        if list.isVisible(frame) { list.fill(frame, animatedColor.value(at: tree?.now ?? 0)) }
+    }
 }
 
 /// Flexible space along the enclosing stack's axis.

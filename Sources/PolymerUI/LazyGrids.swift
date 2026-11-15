@@ -122,7 +122,6 @@ final class LazyGridNode: Node, LazyViewport {
     var items: [GridItem] = []
     var alignment: Alignment = .center
     var spacing = defaultSpacing
-    private weak var tree: TreeState?
     private var segmentCache: [LazySegment]?
     private var tracks: [GridTrack] = []
     private var tracksFor: Double?? = nil
@@ -139,7 +138,6 @@ final class LazyGridNode: Node, LazyViewport {
         let n = reuse ?? LazyGridNode()
         n.axis = axis; n.items = tracks; n.alignment = alignment; n.spacing = spacing ?? defaultSpacing
         n.tracksFor = nil
-        n.tree = c.tree
         var c = c
         c.stackAxis = axis
         n.setChild(0, content, c)

@@ -23,9 +23,36 @@ class Node {
     var role: String { "View" }
     final var children: [Node] = []
     final weak var parent: Node?
-    final private(set) var frame: Rect = .zero
+    /// Where layout put the node, rounded to pixels.
+    final var layoutFrame: Rect { animatedFrame.target }
+    /// Where the node is shown: its layout frame, or on the way there while an animation runs.
+    final var frame: Rect {
+        guard frameAnimates, let t = tree else { return animatedFrame.target }
+        return animatedFrame.value(at: t.now)
+    }
+    private var animatedFrame = Animated(Rect.zero)
+    private var frameAnimates = false
+    private var placedOnce = false
     /// Pixels per point, for snapping frames to the pixel grid.
     final var scale: Double = 1
+    /// The tree the node is in (set when it is resolved).
+    final weak var tree: TreeState?
+    /// The animation the node was last resolved with (from `.animation(_:value:)`), and in which pass.
+    final var resolveAnimation: Animation?
+    final var resolvePass = -1
+
+    /// The animation for changes made to this node now: the update's
+    /// (`withAnimation`), or the one it was resolved with in this pass.
+    final var currentAnimation: Animation? {
+        guard let t = tree else { return nil }
+        return t.passAnimation ?? (resolvePass == t.pass ? resolveAnimation : nil)
+    }
+
+    /// Changes an animated value with the current animation, telling the tree when one starts.
+    final func change<T: Interpolatable>(_ value: inout Animated<T>, to v: T) {
+        let now = tree?.now ?? 0
+        if value.set(v, animation: currentAnimation, now: now) { tree?.startedAnimation(self) }
+    }
 
     /// Sizes already chosen for recent proposals; emptied when the node or anything below it changes.
     private var sizeCache: [(ProposedViewSize, Size)] = []
@@ -58,11 +85,21 @@ class Node {
         let x0 = snap(rect.minX), y0 = snap(rect.minY)
         let f = Rect(x: x0, y: y0, width: snap(rect.maxX) - x0, height: snap(rect.maxY) - y0)
         if rect == placedRect, !needsPlacement { return }
-        frame = f
+        if placedOnce {
+            change(&animatedFrame, to: f)
+            frameAnimates = animatedFrame.isRunning(at: tree?.now ?? 0)
+        } else {
+            // A new node appears where it belongs (insertion transitions come later).
+            _ = animatedFrame.set(f, animation: nil, now: 0)
+            placedOnce = true
+        }
         placedRect = rect
         needsPlacement = false
         placeChildren(in: rect)
     }
+
+    /// True while one of the node's animated values is still moving at `now`.
+    func isAnimating(at now: Double) -> Bool { frameAnimates && animatedFrame.isRunning(at: now) }
 
     /// The exact rectangle the node was last placed in (`frame` is it rounded to pixels).
     final private(set) var placedRect: Rect?

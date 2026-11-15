@@ -152,7 +152,6 @@ final class LazyStackNode: Node, LazyViewport {
     var axis: Axis = .vertical
     var alignment: Alignment = .center
     var spacing = defaultSpacing
-    private weak var tree: TreeState?
     private var segmentCache: [LazySegment]?
     /// Where each item starts along the axis, from the stack's edge, then the total length.
     private var starts: [Double] = []
@@ -170,7 +169,6 @@ final class LazyStackNode: Node, LazyViewport {
         let reuse = (existing as? LazyStackNode).flatMap { $0.axis == axis ? $0 : nil }
         let n = reuse ?? LazyStackNode()
         n.axis = axis; n.alignment = alignment; n.spacing = spacing ?? defaultSpacing
-        n.tree = c.tree
         var c = c
         c.stackAxis = axis
         n.setChild(0, content, c)

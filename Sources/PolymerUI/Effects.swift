@@ -156,7 +156,13 @@ struct LayerEffectView<Content: View, S: RoundedRectShape>: View, PrimitiveView 
 
 /// Draws its content as a display-list layer (opacity, a clipping shape, blur).
 final class LayerEffectNode: Node {
-    var opacity = 1.0
+    private var animatedOpacity = Animated(1.0)
+    /// The opacity set by the view (the target while it animates).
+    var opacity: Double {
+        get { animatedOpacity.target }
+        set { change(&animatedOpacity, to: newValue) }
+    }
+    override func isAnimating(at now: Double) -> Bool { super.isAnimating(at: now) || animatedOpacity.isRunning(at: now) }
     var blur = 0.0
     var mask: ((Rect) -> RoundedRect)?
 
@@ -166,7 +172,7 @@ final class LayerEffectNode: Node {
     override func placeChildren(in r: Rect) { children[0].place(r) }
 
     override func draw(_ list: inout DisplayList) {
-        let effect = LayerEffect(opacity: opacity, mask: mask?(frame), blur: blur)
+        let effect = LayerEffect(opacity: animatedOpacity.value(at: tree?.now ?? 0), mask: mask?(frame), blur: blur)
         list.layer(effect, area: frame) { children[0].draw(&$0) }
     }
 

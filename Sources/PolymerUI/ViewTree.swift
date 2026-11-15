@@ -55,6 +55,16 @@ public final class ViewTree {
     /// the tree needs an `update()`. A window uses it to schedule a frame.
     public func onInvalidate(_ handler: (@Sendable () -> Void)?) { state.queue.onPush(handler) }
 
+    /// The time in seconds, for animations. A window sets it to the display's
+    /// frame time before each frame; headless checks step it.
+    public var time: Double {
+        get { state.now }
+        set { state.now = newValue }
+    }
+
+    /// True while an animation is still moving at `time`: a window keeps drawing frames.
+    public var isAnimating: Bool { state.pruneAnimations() }
+
     /// Number of view bodies evaluated since the tree was made.
     public var bodyEvaluations: Int { state.bodyEvaluations }
 
@@ -73,6 +83,9 @@ public final class ViewTree {
 
     private func updateOnce() -> Bool {
         var changed = false
+        state.pass += 1
+        // Changes made inside withAnimation animate everything this update moves.
+        defer { state.passAnimation = nil }
         if needsResolve {
             needsResolve = false
             let c = ResolveContext(environment: environment, stackAxis: nil, tree: state, host: nil)
@@ -90,7 +103,8 @@ public final class ViewTree {
                 break
             }
             var hosts: [any ViewHost] = []
-            for p in pending {
+            for (p, animation) in pending {
+                if state.passAnimation == nil, let animation { state.passAnimation = animation }
                 if let h = p.host, !h.isDirty { h.isDirty = true; hosts.append(h) }
             }
             // Outer views first: evaluating one brings the views inside it up to date too.

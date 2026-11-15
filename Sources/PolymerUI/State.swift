@@ -141,23 +141,23 @@ public struct Environment<Value>: DynamicProperty, LinkedProperty, EnvironmentRe
 
 /// Views waiting to be evaluated again. Changes can be reported from any thread.
 final class InvalidationQueue: Sendable {
-    private let pending = Mutex<[(Invalidator, Int)]>([])
+    private let pending = Mutex<[(Invalidator, Int, Animation?)]>([])
     private let wake = Mutex<(@Sendable () -> Void)?>(nil)
 
-    func push(_ invalidator: Invalidator, _ generation: Int) {
-        pending.withLock { $0.append((invalidator, generation)) }
+    func push(_ invalidator: Invalidator, _ generation: Int, _ animation: Animation?) {
+        pending.withLock { $0.append((invalidator, generation, animation)) }
         let w = wake.withLock { $0 }
         w?()
     }
 
     /// Takes everything queued; entries made stale by a later evaluation are dropped.
-    func drain() -> [Invalidator] {
-        let taken = pending.withLock { p -> [(Invalidator, Int)] in
+    func drain() -> [(Invalidator, Animation?)] {
+        let taken = pending.withLock { p -> [(Invalidator, Int, Animation?)] in
             let t = p
             p.removeAll(keepingCapacity: true)
             return t
         }
-        return taken.compactMap { $0.1 == $0.0.generation ? $0.0 : nil }
+        return taken.compactMap { $0.1 == $0.0.generation ? ($0.0, $0.2) : nil }
     }
 
     var isEmpty: Bool { pending.withLock { $0.isEmpty } }
@@ -180,7 +180,7 @@ final class Invalidator: Sendable {
 
     func invalidate(_ generation: Int) {
         guard generation == current.load(ordering: .relaxed) else { return }
-        queue.push(self, generation)
+        queue.push(self, generation, Transaction.current.withLock { $0 })
     }
 }
 
@@ -207,6 +207,22 @@ final class TreeState {
     weak var focused: Node?
     /// Views with `.focused(...)`, in the order they first appeared.
     var focusBindings: [WeakFocusBinding] = []
+    /// The current time in seconds (`ViewTree.time`).
+    var now = 0.0
+    /// Bumped by every update, so nodes know whether they were resolved in this one.
+    var pass = 0
+    /// The animation of the changes being applied in this update (`withAnimation`).
+    var passAnimation: Animation?
+    /// Nodes with an animation that may still be running.
+    var animating: [WeakNode] = []
+    func startedAnimation(_ n: Node) {
+        if !animating.contains(where: { $0.node === n }) { animating.append(WeakNode(node: n)) }
+    }
+    /// True while any animation is still moving at `now`; forgets the finished ones.
+    func pruneAnimations() -> Bool {
+        animating.removeAll { $0.node?.isAnimating(at: now) != true }
+        return !animating.isEmpty
+    }
     /// Views with `.onHover`.
     var hoverNodes: [WeakHoverNode] = []
 }
@@ -367,3 +383,5 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         super.unmount()
     }
 }
+
+struct WeakNode { weak var node: Node? }
