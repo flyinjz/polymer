@@ -46,7 +46,7 @@ final class ScrollNode: Node {
     /// The area of the content in view, in the content's layout coordinates.
     var viewport: Rect { frame.offsetBy(dx: offset.x, dy: offset.y) }
 
-    func register(_ s: LazyStackNode) {
+    func register(_ s: any LazyViewport) {
         if !lazyStacks.contains(where: { $0.node === s }) { lazyStacks.append(WeakLazyStack(node: s)) }
     }
 

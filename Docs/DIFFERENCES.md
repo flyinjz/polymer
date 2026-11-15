@@ -37,6 +37,7 @@ deliberate difference is listed here, with the reason.
 | `.onKeyPress(characters:)`, `.focusSection()`, `.defaultFocus`, `.focusedValue` | Not yet | `.focusable()`, `@FocusState`, `.focused(...)` and `.onKeyPress(_:)`, `(keys:)`, `(phases:)` exist. |
 | Focus ring drawn by the system | No ring yet | Its look comes with PolymerDesign. |
 | Keys sent by the system | `ViewTree.key(_:)` with a `KeyPress` or text ("shift+tab") | Windows and headless tools drive the same entry point. |
+| `LazyVGrid`, `LazyHGrid`, `GridItem` | Same, without `pinnedViews` | Each `ForEach` element is one cell (SwiftUI gives each view inside an element its own cell). Column sizes follow SwiftUI's rules as observed (fixed first, the rest shared evenly within bounds, adaptive fitting as many as it can); exact fractional splits may differ slightly. `Grid` and `GridRow` (not lazy) not yet. |
 | `LazyVStack`, `LazyHStack` with `pinnedViews` | Same, without `pinnedViews` | Only a `ForEach` directly inside (through groups and views with a body) is lazy; anything else in the stack is built at once. Elements never built count as the average size of those that were, so the content length is an estimate until every row has been seen. Pinned headers come later. |
 
 ## Coordinates

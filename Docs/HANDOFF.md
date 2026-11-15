@@ -6,14 +6,21 @@ Current state of the work. Every session updates this before it ends.
 
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
   `Docs/DIFFERENCES.md`.
-- Sessions 1 to 4 are committed (2026-11-14), not pushed until the owner
-  says so. Signing needs the owner's passphrase cached on this PC; test
+- Committed (2026-11-14), not pushed until the owner says so: sessions 1
+  to 3, and from session 4 text cut to height, Equatable skipping and the
+  display list.
+- **Not committed yet** (signing locked again during session 4): the JPEG
+  decoder (staged in the index), then the `Image` view, then lazy grids
+  with exact layout (both in the working tree). Commit them in that order
+  once signing works. If they can't be separated cleanly, commit the JPEG
+  decoder from the index, then the rest as one commit.
+- Signing needs the owner's passphrase cached on this PC; test
   without opening a prompt:
   `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (27 checks: base, text, render, ui).
+  passes (30 checks: base, text, render, ui).
 
 ### Done
 
@@ -71,6 +78,16 @@ Current state of the work. Every session updates this before it ends.
     through `RasterImage`, which keeps scaled copies so an unchanged image
     is resampled once; Lanczos-3 in premultiplied values, widened when
     shrinking; corners on whole pixels).
+  - `LazyVGrid` and `LazyHGrid` (session 4) with `GridItem` `.fixed`,
+    `.flexible` and `.adaptive`: built on the lazy stack machinery (the same
+    lazy `ForEach`, average-size estimates, viewport tracking through the
+    `LazyViewport` protocol); rows are the lazy unit, a row is as tall as its
+    tallest cell, cells sit in their slot by `GridItem.alignment` (centre by
+    default). Each `ForEach` element is one cell. Column sizes: fixed first,
+    the rest shared evenly within each item's bounds, an adaptive item
+    fitting as many columns of its minimum as it can (`gridTracks`). Check:
+    `ui.grid` (sizes, cell order, 10,000 album cells building only the rows
+    in view, state kept across scrolling, partial frames equal whole draws).
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
@@ -144,7 +161,10 @@ Read this before changing `PolymerUI`.
   (duplicate ids log an error that says how to fix it). `if`/`else`
   branches and `.id(_:)` changes start with fresh state.
 - **Layout.** `Node.measure(proposal)` remembers answers; `place` skips a
-  subtree whose frame is the same and has no changes below. A changed
+  subtree placed in the same rectangle with no changes below. Children are
+  placed in the exact (unrounded) rectangle and each frame is rounded to
+  pixels on its own (session 4), so equal views in fractional columns get
+  equal sizes, as in SwiftUI; `placedRect` keeps the exact one. A changed
   host invalidates itself and its ancestors only. Stacks lay out the
   flattened list of their content, so groups, `ForEach` and views with a
   body contribute their children directly.
@@ -396,7 +416,8 @@ side) to confirm the luminance rule between the two measured colours.
    `PolymerGPU` (D3D12 here).
 5. `PolymerUI`: ~~views, result builders, observation-based state,
    identity, layout, text wrapping, buttons and clicks~~ done; next:
-   ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
+   ~~lazy stacks~~, ~~lazy grids~~, ~~images~~ and ~~keyboard and focus~~
+   (done), `Grid` (not lazy), scroll bars
    and scroll physics, element names (stable paths for
    Customize and for driving input), a focus ring, animation, ~~skipping bodies of unchanged `Equatable`
    views~~, ~~text cut to the height it is given~~ (both done, session 4).
@@ -423,7 +444,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (27 checks) as of Windows session 4.
+  in debug. Both pass (30 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 
@@ -478,6 +499,10 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): layout passes exact rectangles to children and
+  rounds only each node's own frame (it used to lay children out in the
+  rounded frame, so a 157.33-point column gave its art 157 or 157.5 points
+  by position). Found by the album grid; `ui.grid` now checks it.
 - 2026-11-14 (Windows 4): images are resampled with Lanczos-3 (as image
   editors do for quality) in premultiplied sRGB-encoded values, the space
   the canvas blends in; image rectangles snap to whole pixels so a 1:1

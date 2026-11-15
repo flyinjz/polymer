@@ -387,6 +387,33 @@ struct EquatableScreen: View {
     }
 }
 
+/// An album-style cell: square artwork and a title, with a counter that must survive scrolling.
+struct GridCell: View {
+    let index: Int
+    @State private var taps = 0
+    var body: some View {
+        VStack(spacing: 4) {
+            Color(white: 0.2).aspectRatio(1, contentMode: .fit)
+            Button("Album \(index) \(taps)") { taps += 1 }
+        }
+    }
+}
+
+struct GridScreen: View {
+    let count: Int
+    let font: Font
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 16) {
+                ForEach(0..<count, id: \.self) { GridCell(index: $0) }
+            }
+            .padding(16)
+        }
+        .frame(width: 520, height: 400)
+        .font(font)
+    }
+}
+
 @MainActor let uiChecks: [Check] = [
     Check("ui.layout") { c in
         var r = ImageRenderer(content: try sampleAlbums(root: c.root))
@@ -970,5 +997,84 @@ struct EquatableScreen: View {
         tree.setRoot(Image(solid).resizable().frame(width: 40, height: 30))
         _ = tree.render()
         c.expectEqual(tree.damage, [PixelRect(x: 0, y: 0, width: 40, height: 30)], "a new bitmap redraws the image's area")
+    },
+    Check("ui.grid") { c in
+        func elements(_ tree: String, _ role: String) -> [String] {
+            tree.split(separator: "\n").map { String($0.drop { $0 == " " }) }.filter { $0.hasPrefix(role + " (") }
+        }
+        // Fixed and flexible columns: 300 - 50 fixed - 2 gaps of 8 = 234, shared by the flexible two.
+        let mixed = ImageRenderer(content: LazyVGrid(columns: [GridItem(.fixed(50)), GridItem(.flexible()), GridItem(.flexible())]) {
+            ForEach(0..<7, id: \.self) { _ in Color.white.frame(height: 20) }
+        }.frame(width: 300)).elementTree
+        let cells = elements(mixed, "Color")
+        c.expectEqual(cells.count, 7, "seven cells:\n\(mixed)")
+        c.expectEqual(cells.prefix(3).map { $0 }, ["Color (0, 0, 50x20) #FFFFFF", "Color (58, 0, 117x20) #FFFFFF", "Color (183, 0, 117x20) #FFFFFF"],
+                      "first row: fixed, then two equal flexible columns")
+        c.expect(cells.contains("Color (58, 28, 117x20) #FFFFFF") && cells.last == "Color (0, 56, 50x20) #FFFFFF",
+                 "rows 8 points apart; the last row has one cell:\n\(mixed)")
+        c.expect(elements(mixed, "LazyVGrid").first?.hasPrefix("LazyVGrid (0, 0, 300x76) 3 columns") == true, "the grid's size and columns")
+
+        // Adaptive: as many columns of at least 80 as fit in 300 (three), sharing the width.
+        let adaptive = elements(ImageRenderer(content: LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))]) {
+            ForEach(0..<6, id: \.self) { _ in Color.white.frame(height: 10) }
+        }.frame(width: 300)).elementTree, "Color")
+        c.expectEqual(adaptive.filter { $0.contains(", 0, ") }.count, 3, "three adaptive columns in 300 points: \(adaptive)")
+        c.expect(adaptive.allSatisfy { $0.contains("x10)") && !$0.contains(" 80x") }, "each wider than the minimum: \(adaptive)")
+
+        // A horizontal grid fills columns top to bottom; the rows sit in the middle of its height.
+        let h = elements(ImageRenderer(content: LazyHGrid(rows: [GridItem(.fixed(30)), GridItem(.fixed(30))], spacing: 4) {
+            ForEach(0..<5, id: \.self) { _ in Color.white.frame(width: 40) }
+        }.frame(height: 100)).elementTree, "Color")
+        c.expectEqual(h, ["Color (0, 16, 40x30) #FFFFFF", "Color (0, 54, 40x30) #FFFFFF", "Color (44, 16, 40x30) #FFFFFF",
+                          "Color (44, 54, 40x30) #FFFFFF", "Color (88, 16, 40x30) #FFFFFF"], "LazyHGrid cell order and places")
+
+        // Lazy: ten thousand album cells build only the rows in view.
+        let font = Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)
+        let tree = ViewTree(GridScreen(count: 10_000, font: font))
+        // The cells in view, from the grid's line in the element tree: "... in view 0..<9 of 10000".
+        @MainActor func inView() -> Range<Int>? {
+            guard let line = elements(tree.elementTree, "LazyVGrid").first else { return nil }
+            let words = line.split(separator: " ")
+            guard let i = words.firstIndex(of: "view"), i + 1 < words.count else { return nil }
+            let bounds = words[i + 1].split(separator: ".").map { $0.filter { $0 != "<" } }
+            guard bounds.count == 2, let a = Int(bounds[0]), let b = Int(bounds[1]) else { return nil }
+            return a..<b
+        }
+        let first = inView()
+        c.expect(first?.lowerBound == 0 && (first?.count ?? 99) <= 12, "only the first rows are built: \(String(describing: first))")
+        c.expect(tree.bodyEvaluations < 30, "a handful of bodies, not ten thousand: \(tree.bodyEvaluations)")
+        c.expect(tree.click(text: "Album 1 0"), "a cell in view can be clicked")
+        c.expect(tree.elementTree.contains("\"Album 1 1\""), "and its state changed")
+        let before = tree.bodyEvaluations
+        _ = tree.scroll(at: Point(x: 100, y: 100), dy: 100_000)
+        let far = inView()
+        c.expect((far?.lowerBound ?? 0) > 1000 && (far?.count ?? 99) <= 15, "far down, only the rows there: \(String(describing: far))")
+        c.expect(tree.bodyEvaluations - before < 40, "jumping far builds only what is in view: \(tree.bodyEvaluations - before)")
+        if let far { c.expect(tree.elementTree.contains("\"Album \(far.lowerBound) 0\""), "the first cell in view is shown") }
+        _ = tree.scroll(at: Point(x: 100, y: 100), dy: -10_000_000)
+        c.expect(tree.elementTree.contains("\"Album 1 1\""), "state survives scrolling away and back")
+        // Fractional columns (157.33 points) still give every square the same height:
+        // layout works in exact values and only final frames are rounded.
+        tree.environment.displayScale = 2
+        // "Color (x, y, WxH) #333333": group squares by y; within a row every height matches.
+        var heightsByRow: [String: Set<String>] = [:]
+        for line in elements(tree.elementTree, "Color") {
+            let inside = line.drop { $0 != "(" }.dropFirst().prefix { $0 != ")" }
+            let parts = inside.split(separator: ",").map { $0.filter { $0 != " " } }
+            guard parts.count == 3, let h = parts[2].split(separator: "x").last else { continue }
+            heightsByRow[parts[1], default: []].insert(String(h))
+        }
+        c.expect(!heightsByRow.isEmpty && heightsByRow.values.allSatisfy { $0.count == 1 }, "squares in a row have one height: \(heightsByRow)")
+        // Partial frames equal whole draws while scrolling.
+        _ = tree.render(background: .black)
+        for dy in [37.0, 300, -120, 5000] {
+            _ = tree.scroll(at: Point(x: 100, y: 100), dy: dy)
+            let img = tree.render(background: .black)
+            var whole = Canvas(width: img.width, height: img.height, scale: 2, background: .black)
+            if let l = tree.displayList { whole.draw(l) }
+            c.expect(img == whole.bitmap, "partial frame after scrolling \(dy) equals a whole draw")
+        }
+        try Platform.files.createDirectory(Path.join(c.outputDirectory, "ui"))
+        try Platform.files.write(PNG.encode(tree.render(background: .black)), to: Path.join(c.outputDirectory, "ui/grid@2x.png"))
     },
 ]

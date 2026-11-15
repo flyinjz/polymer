@@ -47,17 +47,25 @@ class Node {
     }
 
     /// Sets the frame (snapped to whole pixels) and places children. Does
-    /// nothing when the frame is the same and nothing below has changed.
+    /// nothing when the rectangle is the same and nothing below has changed.
+    ///
+    /// Children are placed in the exact rectangle, not the snapped frame, so
+    /// layout works in exact values and only each final frame is rounded (as
+    /// in SwiftUI): equal views in fractional columns get equal sizes.
     final func place(_ rect: Rect) {
         let s = scale
         func snap(_ v: Double) -> Double { (v * s).rounded() / s }
         let x0 = snap(rect.minX), y0 = snap(rect.minY)
         let f = Rect(x: x0, y: y0, width: snap(rect.maxX) - x0, height: snap(rect.maxY) - y0)
-        if f == frame, !needsPlacement { return }
+        if rect == placedRect, !needsPlacement { return }
         frame = f
+        placedRect = rect
         needsPlacement = false
-        placeChildren(in: f)
+        placeChildren(in: rect)
     }
+
+    /// The exact rectangle the node was last placed in (`frame` is it rounded to pixels).
+    final private(set) var placedRect: Rect?
 
     func placeChildren(in rect: Rect) {}
 

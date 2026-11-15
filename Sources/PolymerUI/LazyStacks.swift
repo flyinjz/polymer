@@ -33,7 +33,28 @@ enum LazySegment {
     case elements(LazyForEachNode)
 }
 
-struct WeakLazyStack { weak var node: LazyStackNode? }
+/// Lazy stacks and grids: told by their scroll view when the visible area moves.
+@MainActor protocol LazyViewport: AnyObject {
+    func viewportMoved()
+}
+
+struct WeakLazyStack { weak var node: (any LazyViewport)? }
+
+/// The part of a lazy container (frame `r`) in view along `axis`, from its
+/// edge: the nearest scroll view's visible area, or the whole tree without one.
+@MainActor func visibleSpan(_ node: Node & LazyViewport, axis: Axis, _ r: Rect) -> (Double, Double) {
+    var view: Rect? = nil
+    var top: Node = node
+    var n = node.parent
+    while let x = n {
+        if let s = x as? ScrollNode { s.register(node); view = s.viewport; break }
+        top = x
+        n = x.parent
+    }
+    let v = view ?? top.frame
+    let (lo, hi, edge, length) = axis == .horizontal ? (v.minX, v.maxX, r.minX, r.width) : (v.minY, v.maxY, r.minY, r.height)
+    return (max(lo, edge) - edge, min(hi, edge + length) - edge)
+}
 
 /// A `ForEach` inside a lazy stack. Knows every element's id; builds an
 /// element only when the stack asks for it. `children` holds the elements
@@ -127,7 +148,7 @@ final class LazyForEachNode: ContainerNode {
 /// in a stack, with each element of a lazy `ForEach` one item. Items get
 /// their ideal size along the axis; across it the stack fills what it is
 /// offered (as SwiftUI's lazy stacks do), so off-screen rows never need measuring.
-final class LazyStackNode: Node {
+final class LazyStackNode: Node, LazyViewport {
     var axis: Axis = .vertical
     var alignment: Alignment = .center
     var spacing = defaultSpacing
@@ -242,22 +263,6 @@ final class LazyStackNode: Node {
         return axis == .horizontal ? Size(width: reportedLength, height: c) : Size(width: c, height: reportedLength)
     }
 
-    /// The part of the stack in view along its axis, from its edge: the
-    /// nearest scroll view's visible area, or the whole tree without one.
-    private func visibleSpan(_ r: Rect) -> (Double, Double) {
-        var view: Rect? = nil
-        var top: Node = self
-        var n = parent
-        while let x = n {
-            if let s = x as? ScrollNode { s.register(self); view = s.viewport; break }
-            top = x
-            n = x.parent
-        }
-        let v = view ?? top.frame
-        let (lo, hi, edge) = axis == .horizontal ? (v.minX, v.maxX, r.minX) : (v.minY, v.maxY, r.minY)
-        return (max(lo, edge) - edge, min(hi, edge + main(r.size)) - edge)
-    }
-
     /// Items that overlap the span [lo, hi).
     private func items(in span: (Double, Double)) -> Range<Int> {
         let n = starts.count - 1
@@ -276,7 +281,7 @@ final class LazyStackNode: Node {
         offerItems(cross(r.size))
         ensureStarts()
         let segs = segments
-        let span = visibleSpan(r)
+        let span = visibleSpan(self, axis: axis, r)
         // Real sizes replace estimates and move later items; a few rounds settle which items are in view.
         var range = items(in: span)
         for _ in 0..<4 {
@@ -339,7 +344,7 @@ final class LazyStackNode: Node {
     /// Called by the enclosing scroll view after it moved. Asks for placement
     /// again only when other items come into view.
     func viewportMoved() {
-        guard startsValid, items(in: visibleSpan(frame)) == inView else {
+        guard startsValid, items(in: visibleSpan(self, axis: axis, frame)) == inView else {
             setNeedsPlacementUpward()
             tree?.layoutRequested = true
             return
