@@ -6,16 +6,13 @@ Current state of the work. Every session updates this before it ends.
 
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
   `Docs/DIFFERENCES.md`.
-- Committed (2026-11-14), not pushed until the owner says so: sessions 1
-  to 3, and from session 4 text cut to height, Equatable skipping and the
-  display list.
-- **Not committed yet** (signing locked again during session 4), in this
-  order: the JPEG decoder (staged in the index); the `Image` view; lazy
-  grids with exact layout; DESIGN section 11 (effects, at the owner's
-  request); shapes and effects; then whatever follows below in "Done" that
-  is marked session 4 and is not in those. Commit them one by one once
-  signing works; if they can't be separated cleanly, commit the JPEG
-  decoder from the index, then the rest as one commit.
+- Committed, not pushed until the owner says so: sessions 1 to 4. The
+  session 4 backlog (JPEG, Image, grids, DESIGN 11, shapes and effects,
+  layers, glass container, glass sample, animation) was committed as
+  separate signed commits at the start of session 5.
+- Session 5 runs two agents at once (A: rendering and platform, B:
+  PolymerUI), coordinating in `out/coordination.md` (not committed).
+  `BUILD_DIR=.build-b bash Tools/check.sh` builds in another folder.
 - Signing needs the owner's passphrase cached on this PC; test
   without opening a prompt:
   `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
@@ -223,6 +220,12 @@ Read this before changing drawing in `PolymerUI` or `PolymerRender`.
 - Known limits: scrolling damages the whole viewport (moving the
   pixels that stay visible comes later); a changed text run damages the
   whole run; the kept CPU canvas is 16 bytes per pixel.
+- **Scaling** (session 5): `DisplayList.scaled(by:about:)` records its body
+  scaled about an anchor at recording time (`zoom`): rects, images, paths,
+  glyph runs (drawn at the new size from outlines, so text stays sharp),
+  layer areas, masks and blur, backdrop shapes and glass distances. Items
+  keep their usual form, so renderers and damage need nothing new. Check:
+  `render.scaled`.
 - Checks: `render.display-list` (recording, damage cases, partial equals
   whole), `ui.damage` (an Add click redraws about 4% of the counter image;
   every frame while scrolling the plain and lazy lists equals a whole

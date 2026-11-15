@@ -1,6 +1,7 @@
 import PolymerBase
 import PolymerPlatform
 import PolymerRender
+import PolymerText
 
 @MainActor let renderChecks: [Check] = [
     Check("render.jpeg") { c in
@@ -98,6 +99,42 @@ import PolymerRender
         var lit = 0
         for y in 0..<8 { for x in 0..<8 where k[x, y].r == 255 { lit += 1 } }
         c.expectEqual(lit, 9, "only the clipped 3x3 area is filled")
+    },
+
+    Check("render.scaled") { c in
+        // Recording inside `scaled(by:about:)` equals recording the scaled geometry directly.
+        let face = try TextReference.font(root: c.root, "Inter-Regular.otf")
+        let glyphs = TextLayout.line("Scale 42", font: face, pixelSize: 12)
+        let glass = GlassStyle(refraction: 6, bezel: 8, frost: 2, tint: Color(white: 1, opacity: 0.1), rim: 0.5)
+        let anchor = Point(x: 30, y: 20), s = 1.5
+        func at(_ p: Point) -> Point { Point(x: anchor.x + (p.x - anchor.x) * s, y: anchor.y + (p.y - anchor.y) * s) }
+        func r(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Rect {
+            let o = at(Point(x: x, y: y)); return Rect(x: o.x, y: o.y, width: w * s, height: h * s)
+        }
+        var a = DisplayList(width: 300, height: 200, scale: 2)
+        a.translated(by: Point(x: 4, y: 3)) { l in
+            l.scaled(by: s, about: anchor) { l in
+                l.fill(Rect(x: 10, y: 10, width: 20, height: 8), .white)
+                l.translated(by: Point(x: 2, y: 1)) { l in l.fill(Rect(x: 30, y: 30, width: 5, height: 5), .white) }
+                l.drawGlyphs(glyphs, font: face, size: 12, at: Point(x: 8, y: 40), color: .white)
+                l.drawBackdrop(RoundedRect(Rect(x: 12, y: 12, width: 30, height: 14), cornerRadius: 7), .glass(glass))
+            }
+        }
+        var b = DisplayList(width: 300, height: 200, scale: 2)
+        b.translated(by: Point(x: 4, y: 3)) { l in
+            l.fill(r(10, 10, 20, 8), .white)
+            l.fill(r(32, 31, 5, 5), .white)
+            let p = at(Point(x: 8, y: 40))
+            let scaled = glyphs.map { PositionedGlyph(glyph: $0.glyph, x: $0.x * s, advance: $0.advance * s, cluster: $0.cluster) }
+            l.drawGlyphs(scaled, font: face, size: 12 * s, at: p, color: .white)
+            l.drawBackdrop(RoundedRect(r(12, 12, 30, 14), cornerRadius: 7 * s), BackdropEffect.glass(glass).scaled(by: s))
+        }
+        c.expectEqual(a.items.count, 4, "everything recorded")
+        c.expectEqual(a.items.map(\.bounds), b.items.map(\.bounds), "the same pixel bounds")
+        var ca = Canvas(width: 300, height: 200, scale: 2, background: Color(white: 0.2)), cb = ca
+        ca.draw(a); cb.draw(b)
+        c.expect(ca.bitmap == cb.bitmap, "scaled recording draws the pixels of the scaled geometry")
+        c.expectEqual(a.zoom, 1, "zoom restored")
     },
     Check("render.display-list") { c in
         let red = Color(red: 1, green: 0, blue: 0), blue = Color(red: 0, green: 0, blue: 1)

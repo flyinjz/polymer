@@ -84,6 +84,8 @@ public struct DisplayList {
     public private(set) var clip: PixelRect
     /// Added to every position recorded, in points.
     public private(set) var origin: Point = .zero
+    /// Multiplies every size and position recorded (inside `scaled`), before `origin` is added.
+    public private(set) var zoom: Double = 1
 
     public init(width: Int, height: Int, scale: Double = 1) {
         self.width = width; self.height = height; self.scale = scale
@@ -98,6 +100,7 @@ public struct DisplayList {
         items.removeAll(keepingCapacity: true)
         clip = fullRect
         origin = .zero
+        zoom = 1
     }
 
     // MARK: Recording
@@ -106,7 +109,7 @@ public struct DisplayList {
     /// to whole pixels) inside the current clip.
     public mutating func clipped(to rect: Rect, _ body: (inout DisplayList) -> Void) {
         let saved = clip
-        clip = PixelRect.covering(rect, origin: origin, scale: scale).clamped(to: clip)
+        clip = PixelRect.covering(zoomed(rect), origin: origin, scale: scale).clamped(to: clip)
         body(&self)
         clip = saved
     }
@@ -114,13 +117,35 @@ public struct DisplayList {
     /// Runs `body` with everything it records moved by `offset` (points).
     public mutating func translated(by offset: Point, _ body: (inout DisplayList) -> Void) {
         let saved = origin
-        origin = origin + offset
+        origin = origin + offset * zoom
         body(&self)
         origin = saved
     }
 
+    /// Runs `body` with everything it records scaled by `s` about `anchor`
+    /// (points): sizes, positions, text size, corner radii and effect
+    /// distances. Text is drawn at the new size from its outlines, so it stays sharp.
+    public mutating func scaled(by s: Double, about anchor: Point, _ body: (inout DisplayList) -> Void) {
+        guard s != 1 else { body(&self); return }
+        let savedOrigin = origin, savedZoom = zoom
+        // A local point p lands at p * zoom + origin; after this at (anchor + (p - anchor) * s) * zoom + origin.
+        origin = origin + anchor * ((1 - s) * zoom)
+        zoom *= s
+        if zoom > 0 { body(&self) }
+        origin = savedOrigin; zoom = savedZoom
+    }
+
+    @inline(__always) func zoomed(_ r: Rect) -> Rect {
+        zoom == 1 ? r : Rect(x: r.minX * zoom, y: r.minY * zoom, width: r.width * zoom, height: r.height * zoom)
+    }
+
+    @inline(__always) func zoomed(_ r: RoundedRect) -> RoundedRect {
+        zoom == 1 ? r : RoundedRect(zoomed(r.rect), cornerRadius: r.cornerRadius * zoom)
+    }
+
     /// False when `rect` (points) lies entirely outside the clip, so recording it would add nothing.
     public func isVisible(_ rect: Rect) -> Bool {
+        let rect = zoomed(rect)
         let x0 = (rect.minX + origin.x) * scale, y0 = (rect.minY + origin.y) * scale
         let x1 = (rect.maxX + origin.x) * scale, y1 = (rect.maxY + origin.y) * scale
         return x1 > Double(clip.x) && x0 < Double(clip.x + clip.width) && y1 > Double(clip.y) && y0 < Double(clip.y + clip.height)
@@ -129,19 +154,30 @@ public struct DisplayList {
     /// Fills a rectangle given in points.
     public mutating func fill(_ rect: Rect, _ color: Color) {
         guard color.opacity > 0 else { return }
+        let rect = zoomed(rect)
         add(.rect(rect, color), PixelRect.covering(rect, origin: origin, scale: scale))
     }
 
     /// Fills a path given in points.
     public mutating func fill(_ path: Path, _ color: Color) {
         guard color.opacity > 0, !path.isEmpty else { return }
+        let path = zoom == 1 ? path : path.applying(AffineTransform(a: zoom, b: 0, c: 0, d: zoom, tx: 0, ty: 0))
         add(.path(path, color), PixelRect.covering(path.controlBounds, origin: origin, scale: scale).outset(by: 1))
     }
 
     /// Records laid-out glyphs with the line's baseline-left at `position` (points).
     public mutating func drawGlyphs(_ glyphs: [PositionedGlyph], font: FontFace, size: Double, at position: Point,
                                     color: Color, options: TextRenderingOptions = .standard) {
-        guard color.opacity > 0, let first = glyphs.first, let last = glyphs.last else { return }
+        guard color.opacity > 0, !glyphs.isEmpty else { return }
+        if zoom != 1 {
+            let z = zoom
+            let scaled = glyphs.map { PositionedGlyph(glyph: $0.glyph, x: $0.x * z, advance: $0.advance * z, cluster: $0.cluster) }
+            zoom = 1
+            drawGlyphs(scaled, font: font, size: size * z, at: position * z, color: color, options: options)
+            zoom = z
+            return
+        }
+        let first = glyphs[0], last = glyphs[glyphs.count - 1]
         // Every glyph lies inside the font's glyph box at its position; 2 pixels
         // more cover stem darkening and coverage at the box's edge.
         // A font without a glyph box gets a generous one.
@@ -159,6 +195,7 @@ public struct DisplayList {
 
     /// Records an image stretched to `rect` (points).
     public mutating func draw(_ image: RasterImage, in rect: Rect) {
+        let rect = zoomed(rect)
         add(.image(image, rect), PixelRect.snapping(rect, origin: origin, scale: scale))
     }
 
@@ -168,6 +205,9 @@ public struct DisplayList {
     public mutating func layer(_ effect: LayerEffect, area: Rect, _ body: (inout DisplayList) -> Void) {
         if effect.isIdentity { body(&self); return }
         if effect.opacity <= 0 { return }
+        var effect = effect
+        let area = zoomed(area)
+        if zoom != 1 { effect.mask = effect.mask.map { zoomed($0) }; effect.blur *= zoom }
         let spread = 3 * effect.blur
         let grown = Rect(x: area.minX - spread, y: area.minY - spread, width: area.width + 2 * spread, height: area.height + 2 * spread)
         let bounds = PixelRect.covering(grown, origin: origin, scale: scale).clamped(to: clip)
@@ -186,6 +226,17 @@ public struct DisplayList {
 
     /// Records a backdrop effect inside a shape that may be several merged into one.
     public mutating func drawBackdrop(_ shape: BackdropShape, _ effect: BackdropEffect) {
+        if zoom != 1 {
+            let z = zoom
+            let shape: BackdropShape = switch shape {
+            case .single(let r): .single(zoomed(r))
+            case .union(let rs, let k): .union(rs.map { zoomed($0) }, smoothing: k * z)
+            }
+            zoom = 1
+            drawBackdrop(shape, effect.scaled(by: z))
+            zoom = z
+            return
+        }
         let b = shape.bounds
         guard b.width > 0, b.height > 0 else { return }
         add(.backdrop(shape, effect), PixelRect.covering(b, origin: origin, scale: scale), reach: effect.reach(scale: scale))
@@ -266,29 +317,29 @@ public struct DisplayList {
 
 extension PixelRect {
     /// `rect` (points) moved by `origin`, in pixels, rounded outward.
-    static func covering(_ rect: Rect, origin: Point, scale: Double) -> PixelRect {
+    public static func covering(_ rect: Rect, origin: Point, scale: Double) -> PixelRect {
         let x0 = Int(((rect.minX + origin.x) * scale).rounded(.down)), y0 = Int(((rect.minY + origin.y) * scale).rounded(.down))
         let x1 = Int(((rect.maxX + origin.x) * scale).rounded(.up)), y1 = Int(((rect.maxY + origin.y) * scale).rounded(.up))
         return PixelRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
     /// `rect` (points) moved by `origin`, in pixels, each corner rounded to the nearest pixel.
-    static func snapping(_ rect: Rect, origin: Point, scale: Double) -> PixelRect {
+    public static func snapping(_ rect: Rect, origin: Point, scale: Double) -> PixelRect {
         let x0 = Int(((rect.minX + origin.x) * scale).rounded()), y0 = Int(((rect.minY + origin.y) * scale).rounded())
         let x1 = Int(((rect.maxX + origin.x) * scale).rounded()), y1 = Int(((rect.maxY + origin.y) * scale).rounded())
         return PixelRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
     }
 
     /// The part inside `r`, with the same arithmetic as `Canvas.clipped`.
-    func clamped(to r: PixelRect) -> PixelRect {
+    public func clamped(to r: PixelRect) -> PixelRect {
         let x0 = max(r.x, x), y0 = max(r.y, y)
         let x1 = min(r.x + r.width, x + width), y1 = min(r.y + r.height, y + height)
         return PixelRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
     }
 
-    func outset(by n: Int) -> PixelRect { PixelRect(x: x - n, y: y - n, width: width + 2 * n, height: height + 2 * n) }
+    public func outset(by n: Int) -> PixelRect { PixelRect(x: x - n, y: y - n, width: width + 2 * n, height: height + 2 * n) }
 
-    func union(_ r: PixelRect) -> PixelRect {
+    public func union(_ r: PixelRect) -> PixelRect {
         let x0 = min(x, r.x), y0 = min(y, r.y)
         return PixelRect(x: x0, y: y0, width: max(x + width, r.x + r.width) - x0, height: max(y + height, r.y + r.height) - y0)
     }
@@ -298,14 +349,14 @@ extension PixelRect {
         x <= r.x + r.width && r.x <= x + width && y <= r.y + r.height && r.y <= y + height
     }
 
-    func intersects(_ r: PixelRect) -> Bool {
+    public func intersects(_ r: PixelRect) -> Bool {
         x < r.x + r.width && r.x < x + width && y < r.y + r.height && r.y < y + height
     }
 
-    var area: Int { width * height }
+    public var area: Int { width * height }
 
     /// True when `r` lies entirely inside.
-    func contains(_ r: PixelRect) -> Bool {
+    public func contains(_ r: PixelRect) -> Bool {
         r.x >= x && r.y >= y && r.x + r.width <= x + width && r.y + r.height <= y + height
     }
 

@@ -37,23 +37,33 @@ public enum BackdropEffect: Hashable, Sendable {
     case material(blur: Double, tint: Color)
     case glass(GlassStyle)
 
-    var blurRadius: Double {
+    public var blurRadius: Double {
         switch self { case .material(let b, _): b; case .glass(let g): g.frost }
     }
 
     /// How many pixels beyond a point the effect reads to draw it.
-    func reach(scale: Double) -> Int {
+    public func reach(scale: Double) -> Int {
         let blur = Int((3 * blurRadius * scale).rounded(.up))
         switch self {
         case .material: return blur + 1
         case .glass(let g): return blur + Int((g.refraction * scale * (1 + abs(g.dispersion))).rounded(.up)) + 2
         }
     }
+
+    /// The same effect with every distance multiplied by `s` (a scaled view).
+    public func scaled(by s: Double) -> BackdropEffect {
+        switch self {
+        case .material(let b, let t): return .material(blur: b * s, tint: t)
+        case .glass(var g):
+            g.refraction *= s; g.bezel *= s; g.frost *= s; g.rimWidth *= s
+            return .glass(g)
+        }
+    }
 }
 
-enum Blur {
+public enum Blur {
     /// Normalised Gaussian weights for a standard deviation of `sigma` pixels, out to 3 sigma.
-    static func kernel(_ sigma: Double) -> [Float] {
+    public static func kernel(_ sigma: Double) -> [Float] {
         guard sigma > 0.01 else { return [1] }
         let n = Int((3 * sigma).rounded(.up))
         var w = [Double](repeating: 0, count: 2 * n + 1)
@@ -221,7 +231,7 @@ public enum BackdropShape: Hashable, Sendable {
     }
 
     /// The same shape in pixels, for drawing at `scale` with `origin` added (points).
-    func inPixels(origin o: Point, scale s: Double) -> BackdropShape {
+    public func inPixels(origin o: Point, scale s: Double) -> BackdropShape {
         func px(_ r: RoundedRect) -> RoundedRect {
             RoundedRect(Rect(x: (r.rect.minX + o.x) * s, y: (r.rect.minY + o.y) * s, width: r.rect.width * s, height: r.rect.height * s),
                         cornerRadius: r.cornerRadius * s)
@@ -262,7 +272,7 @@ public enum BackdropShape: Hashable, Sendable {
     }
 
     /// Half the thickness of the thickest part, limiting the rim's width.
-    var halfThickness: Double {
+    public var halfThickness: Double {
         switch self {
         case .single(let r): return min(r.rect.width, r.rect.height) / 2
         case .union(let rs, _): return rs.map { min($0.rect.width, $0.rect.height) / 2 }.max() ?? 0
