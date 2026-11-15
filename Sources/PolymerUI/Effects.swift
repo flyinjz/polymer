@@ -114,3 +114,60 @@ final class BackdropNode: Node {
         list.drawBackdrop(shape, effect)
     }
 }
+
+// MARK: Layers: opacity, clipShape, blur
+
+extension View {
+    /// Draws the view with `opacity` (0 to 1). A view at 0 is not drawn and can't be clicked.
+    public func opacity(_ opacity: Double) -> some View {
+        LayerEffectView(content: self, opacity: min(max(opacity, 0), 1), shape: nil as Rectangle?, blur: 0)
+    }
+    /// Cuts the view to `shape` with an anti-aliased edge; clicks outside the shape miss it.
+    public func clipShape<S: RoundedRectShape>(_ shape: S) -> some View {
+        LayerEffectView(content: self, opacity: 1, shape: shape, blur: 0)
+    }
+    /// Blurs what the view draws (a Gaussian; `radius` in points), spreading past its frame by about 3 radii.
+    public func blur(radius: Double) -> some View {
+        LayerEffectView(content: self, opacity: 1, shape: nil as Rectangle?, blur: max(0, radius))
+    }
+}
+
+struct LayerEffectView<Content: View, S: RoundedRectShape>: View, PrimitiveView {
+    let content: Content
+    let opacity: Double
+    let shape: S?
+    let blur: Double
+    var body: Never { fatalError("LayerEffectView is a built-in view") }
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? LayerEffectNode) ?? LayerEffectNode()
+        n.opacity = opacity
+        n.blur = blur
+        if let shape { n.mask = { shape.roundedRect(in: $0) } } else { n.mask = nil }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+/// Draws its content as a display-list layer (opacity, a clipping shape, blur).
+final class LayerEffectNode: Node {
+    var opacity = 1.0
+    var blur = 0.0
+    var mask: ((Rect) -> RoundedRect)?
+
+    override var isElement: Bool { false }
+    override var clipsContent: Bool { mask != nil }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+
+    override func draw(_ list: inout DisplayList) {
+        let effect = LayerEffect(opacity: opacity, mask: mask?(frame), blur: blur)
+        list.layer(effect, area: frame) { children[0].draw(&$0) }
+    }
+
+    override func hitTest(_ p: Point) -> Node? {
+        if opacity <= 0 { return nil }
+        if let mask, mask(frame).signedDistance(p.x, p.y) > 0 { return nil }
+        return children[0].hitTest(p)
+    }
+}

@@ -223,4 +223,90 @@ func coverage(_ b: Bitmap, channel: Int = 0) -> Double {
         try Platform.files.write(PNG.encode(showcase.bitmap), to: Path.join(c.outputDirectory, "effects/glass-showcase@2x.png"))
         c.note("showcase in \(c.outputDirectory)/effects")
     },
+    Check("effects.layers") { c in
+        @MainActor func render<V: View>(_ v: V, scale: Double = 1) -> Bitmap {
+            var r = ImageRenderer(content: v)
+            r.scale = scale
+            r.background = .black
+            return r.bitmap
+        }
+        let red = Color(red: 1, green: 0, blue: 0)
+        // Opacity on one view equals a colour with that opacity.
+        c.expect(render(Color.white.frame(width: 10, height: 10).opacity(0.5)) == render(Color(white: 1, opacity: 0.5).frame(width: 10, height: 10)),
+                 "opacity(0.5) on a fill equals a half-transparent fill")
+        // Group opacity: overlapping content is composited first, so the overlap shows only the top view at half strength.
+        let group = render(ZStack {
+            Color.white.frame(width: 20, height: 20)
+            red.frame(width: 10, height: 10)
+        }.opacity(0.5))
+        let p = group[10, 10]
+        c.expect(p.r == 128 && p.g == 0 && p.b == 0, "the overlap is the red view at half strength, not white showing through: \(p)")
+
+        // clipShape: the same area as the shape filled, with an anti-aliased edge.
+        let clipped = render(Color.white.frame(width: 40, height: 40).clipShape(Circle()))
+        c.expectClose(coverage(clipped), Double.pi * 400, tolerance: 0.5, "a square cut to a circle has the circle's area")
+        let photo = try JPEG.decode(try Platform.files.read(Path.join(c.root, "Tests/Fixtures/Images/baseline-444.jpg")))
+        let art = render(Image(photo).resizable().frame(width: 60, height: 40).clipShape(RoundedRectangle(cornerRadius: 8)), scale: 2)
+        c.expect(art[0, 0] == (0, 0, 0, 255) && art[60, 40] != (0, 0, 0, 255), "rounded corners cut, middle kept")
+
+        // Clicks miss outside a clip shape.
+        var taps = 0
+        let tree = ViewTree(Color.white.frame(width: 40, height: 40).onTapGesture { taps += 1 }.clipShape(Circle()))
+        c.expect(!tree.click(at: Point(x: 2, y: 2)), "a click in the cut-off corner misses")
+        c.expect(tree.click(at: Point(x: 20, y: 20)) && taps == 1, "a click in the circle hits")
+
+        // Opacity 0: nothing drawn, nothing clicked.
+        let hidden = ViewTree(Color.white.frame(width: 40, height: 40).onTapGesture { taps += 1 }.opacity(0))
+        _ = hidden.render()
+        c.expectEqual(hidden.displayList?.items.count, 0, "nothing recorded")
+        c.expect(!hidden.click(at: Point(x: 20, y: 20)), "and nothing to click")
+
+        // Blur spreads the content past its frame and keeps its light.
+        let blurred = render(Color.white.frame(width: 10, height: 10).blur(radius: 2).padding(10))
+        c.expectClose(coverage(blurred), 100, tolerance: 0.6, "a blurred square keeps its light")
+        c.expect(blurred[8, 15].r > 0 && blurred[15, 15].r < 255, "and spreads past its edge")
+
+        // In a tree: partial frames equal whole draws with layers, while scrolling and when a layer changes.
+        let face = try TextReference.font(root: c.root, "Geist-Regular.otf")
+        let model = CounterModel()
+        struct Screen: View {
+            let model: CounterModel
+            let photo: Bitmap
+            var body: some View {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(0..<30, id: \.self) { i in
+                            HStack {
+                                Image(photo).resizable().frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 6))
+                                Text("Track \(i)").opacity(i % 3 == 0 ? 0.5 : 1)
+                                Spacer()
+                                Text("\(model.count)").blur(radius: i == 4 ? 1.5 : 0)
+                            }
+                            .padding(4)
+                        }
+                    }
+                }
+                .frame(width: 220, height: 180)
+            }
+        }
+        var e = EnvironmentValues()
+        e.displayScale = 2
+        let t = ViewTree(Screen(model: model, photo: photo).font(Font(face, size: 13)), environment: e)
+        _ = t.render(background: .black)
+        @MainActor func matchesWhole(_ what: String) {
+            let img = t.render(background: .black)
+            var whole = Canvas(width: img.width, height: img.height, scale: 2, background: .black)
+            if let l = t.displayList { whole.draw(l) }
+            c.expect(img == whole.bitmap, "partial frame equals a whole draw: \(what)")
+        }
+        for dy: Double in [7, 30, -11, 90] {
+            _ = t.scroll(at: Point(x: 100, y: 100), dy: dy)
+            matchesWhole("after scrolling \(dy)")
+        }
+        _ = t.scroll(at: Point(x: 100, y: 100), dy: -1000)
+        model.count += 7
+        matchesWhole("after blurred text changed")
+        try Platform.files.createDirectory(Path.join(c.outputDirectory, "effects"))
+        try Platform.files.write(PNG.encode(t.render(background: .black)), to: Path.join(c.outputDirectory, "effects/layers@2x.png"))
+    },
 ]

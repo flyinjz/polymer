@@ -9,10 +9,12 @@ Current state of the work. Every session updates this before it ends.
 - Committed (2026-11-14), not pushed until the owner says so: sessions 1
   to 3, and from session 4 text cut to height, Equatable skipping and the
   display list.
-- **Not committed yet** (signing locked again during session 4): the JPEG
-  decoder (staged in the index), then the `Image` view, then lazy grids
-  with exact layout (both in the working tree). Commit them in that order
-  once signing works. If they can't be separated cleanly, commit the JPEG
+- **Not committed yet** (signing locked again during session 4), in this
+  order: the JPEG decoder (staged in the index); the `Image` view; lazy
+  grids with exact layout; DESIGN section 11 (effects, at the owner's
+  request); shapes and effects; then whatever follows below in "Done" that
+  is marked session 4 and is not in those. Commit them one by one once
+  signing works; if they can't be separated cleanly, commit the JPEG
   decoder from the index, then the rest as one commit.
 - Signing needs the owner's passphrase cached on this PC; test
   without opening a prompt:
@@ -20,7 +22,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (33 checks: base, text, render, ui, effects).
+  passes (34 checks: base, text, render, ui, effects).
 
 ### Done
 
@@ -105,7 +107,8 @@ Current state of the work. Every session updates this before it ends.
     focus, and show "disabled" in the element tree. Button styles can use
     `@Environment` and `@State` (`LinksNestedProperties`).
   - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
-    `glassEffect`, `background(_ material:in:)`,
+    `glassEffect`, `background(_ material:in:)`, `opacity`, `clipShape`,
+    `blur(radius:)` (layers, session 4),
     `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -263,9 +266,19 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   `effects.glass` (rim refraction, untouched middle, rim light, glass over
   a scrolling list redraws partially with identical pixels, reduced
   transparency). `out/checks/effects/glass-showcase@2x.png` shows the look.
+- **Layers.** `DisplayList.layer(effect, area:) { ... }` records
+  `beginLayer(LayerEffect)` ... `endLayer` (opacity, a `RoundedRect` mask,
+  blur). On replay the layer's items are drawn offscreen over the part
+  being drawn plus the blur's reach (transparent background), blurred,
+  masked by the distance field and composited with the opacity, so group
+  opacity is right (overlaps don't show through). A backdrop inside a
+  layer sees only the layer's own content so far (`from`). A blurred layer
+  has `reach`, so damage spreads through it like an effect. `.opacity(0)`
+  records nothing and isn't clickable; `.clipShape` clicks miss outside the
+  shape. Check: `effects.layers`.
 - Next: GPU versions, `GlassEffectContainer` (smooth union of distance
-  fields), `interactive()`, `.blur(radius:)` on a view's own content (needs
-  layers), shadows if the design system wants them, speed (the CPU blur is
+  fields), `interactive()`,
+  shadows if the design system wants them, speed (the CPU blur is
   direct; a box-filter approximation or downsampling for large radii).
 
 ### Skipping unchanged views (session 4)
@@ -496,7 +509,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (33 checks) as of Windows session 4.
+  in debug. Both pass (34 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 

@@ -17,6 +17,9 @@ public struct DisplayItem: Hashable {
         case image(RasterImage, Rect)
         /// A backdrop effect inside a rounded rectangle in points (DESIGN section 11).
         case backdrop(RoundedRect, BackdropEffect)
+        /// The items up to the matching `endLayer` are drawn apart, then composited with the effect.
+        case beginLayer(LayerEffect)
+        case endLayer
     }
     public var operation: Operation
     /// Added to every position, in points (`Canvas.origin`).
@@ -25,8 +28,26 @@ public struct DisplayItem: Hashable {
     public var clip: PixelRect
     /// Pixels the operation may change: its extent inside the clip, never empty.
     public var bounds: PixelRect
-    /// For backdrop effects: how many pixels around a point the effect reads (0 for everything else).
+    /// For backdrop effects and blurred layers: how many pixels around a point
+    /// the effect reads (0 for everything else).
     public var reach: Int = 0
+}
+
+/// What a layer does to its content when compositing it: opacity, a shape
+/// that clips it (anti-aliased), and blur.
+public struct LayerEffect: Hashable, Sendable {
+    public var opacity: Double
+    /// Clips the content, in points (in the coordinates the layer was recorded in).
+    public var mask: RoundedRect?
+    /// Gaussian blur of the content, radius in points.
+    public var blur: Double
+
+    public init(opacity: Double = 1, mask: RoundedRect? = nil, blur: Double = 0) {
+        self.opacity = opacity; self.mask = mask; self.blur = blur
+    }
+
+    /// True when the layer would change nothing.
+    public var isIdentity: Bool { opacity >= 1 && mask == nil && blur <= 0 }
 }
 
 /// Laid-out glyphs with the line's baseline-left at `position` (points).
@@ -139,6 +160,25 @@ public struct DisplayList {
     /// Records an image stretched to `rect` (points).
     public mutating func draw(_ image: RasterImage, in rect: Rect) {
         add(.image(image, rect), PixelRect.snapping(rect, origin: origin, scale: scale))
+    }
+
+    /// Records `body` as a layer over `area` (points): drawn apart, then
+    /// composited with `effect`. Content outside `area` (plus the blur's
+    /// spread) is cut off. Nothing is recorded when the area is out of view.
+    public mutating func layer(_ effect: LayerEffect, area: Rect, _ body: (inout DisplayList) -> Void) {
+        if effect.isIdentity { body(&self); return }
+        if effect.opacity <= 0 { return }
+        let spread = 3 * effect.blur
+        let grown = Rect(x: area.minX - spread, y: area.minY - spread, width: area.width + 2 * spread, height: area.height + 2 * spread)
+        let bounds = PixelRect.covering(grown, origin: origin, scale: scale).clamped(to: clip)
+        guard !bounds.isEmpty else { return }
+        let reach = effect.blur > 0 ? Int((3 * effect.blur * scale).rounded(.up)) + 1 : 0
+        items.append(DisplayItem(operation: .beginLayer(effect), origin: origin, clip: clip, bounds: bounds, reach: reach))
+        let saved = clip
+        clip = bounds
+        body(&self)
+        clip = saved
+        items.append(DisplayItem(operation: .endLayer, origin: origin, clip: clip, bounds: bounds))
     }
 
     /// Records a backdrop effect inside `shape` (points): it filters what was recorded before it.

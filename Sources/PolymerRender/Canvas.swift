@@ -151,13 +151,40 @@ public struct Canvas {
     /// Draws the items of `list` that touch `region` (pixels; nil for the
     /// whole canvas), changing no pixel outside it. Pixels inside come out
     /// exactly as if the whole list were drawn.
-    public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) { draw(list, in: region, upTo: list.items.count) }
+    public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) { draw(list, in: region, range: 0..<list.items.count) }
 
-    /// Draws the first `end` items of `list` that touch `region`.
-    mutating func draw(_ list: DisplayList, in region: PixelRect?, upTo end: Int) {
+    /// Draws the items of `range` that touch `region`. A layer is drawn
+    /// offscreen from its own items and composited; a layer left open at
+    /// the end of the range ends there.
+    mutating func draw(_ list: DisplayList, in region: PixelRect?, range: Range<Int>) {
         let region = region ?? bounds
+        let items = list.items
+        // Where each layer in the range ends.
+        var ends: [Int: Int] = [:]
+        var open: [Int] = []
+        for k in range {
+            switch items[k].operation {
+            case .beginLayer: open.append(k)
+            case .endLayer: if let s = open.popLast() { ends[s] = k }
+            default: break
+            }
+        }
         let savedClip = clip, savedOrigin = origin
-        for (k, item) in list.items[0..<end].enumerated() where item.bounds.intersects(region) {
+        var k = range.lowerBound
+        while k < range.upperBound {
+            let item = items[k]
+            if case .beginLayer(let effect) = item.operation {
+                let end = ends[k] ?? range.upperBound
+                if item.bounds.intersects(region) {
+                    clip = item.clip.clamped(to: region)
+                    origin = item.origin
+                    drawLayer(list, k, end, effect, region: region)
+                }
+                k = end + 1
+                continue
+            }
+            defer { k += 1 }
+            guard item.bounds.intersects(region) else { continue }
             clip = item.clip.clamped(to: region)
             origin = item.origin
             switch item.operation {
@@ -165,10 +192,46 @@ public struct Canvas {
             case .path(let p, let c): fill(p, c)
             case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
             case .image(let img, let r): draw(img, in: r)
-            case .backdrop(let shape, let effect): drawBackdrop(list, k, shape, effect, region: region)
+            case .backdrop(let shape, let effect): drawBackdrop(list, k, shape, effect, region: region, from: range.lowerBound)
+            case .beginLayer, .endLayer: break
             }
         }
         clip = savedClip; origin = savedOrigin
+    }
+
+    /// Draws the layer whose items are `begin + 1 ..< end`: offscreen over the
+    /// part being drawn (plus the blur's reach), then blurred, masked and
+    /// composited with its opacity.
+    mutating func drawLayer(_ list: DisplayList, _ begin: Int, _ end: Int, _ effect: LayerEffect, region: PixelRect) {
+        let item = list.items[begin]
+        let target = item.bounds.clamped(to: clip)
+        guard !target.isEmpty else { return }
+        let area = target.outset(by: item.reach).clamped(to: list.fullRect)
+        var off = Canvas(bounds: area, scale: scale, background: .clear)
+        off.glyphCache = glyphCache
+        off.draw(list, in: area, range: (begin + 1)..<end)
+        let content = effect.blur > 0 ? Blur.apply(off.pixels, width: area.width, height: area.height, sigma: effect.blur * scale) : off.pixels
+        let o = origin, s = scale
+        let mask = effect.mask.map {
+            RoundedRect(Rect(x: ($0.rect.minX + o.x) * s, y: ($0.rect.minY + o.y) * s, width: $0.rect.width * s, height: $0.rect.height * s),
+                        cornerRadius: $0.cornerRadius * s)
+        }
+        let opacity = Float(effect.opacity)
+        for y in target.y..<(target.y + target.height) {
+            for x in target.x..<(target.x + target.width) {
+                var k = opacity
+                if let mask { k *= Float(min(max(0.5 - mask.signedDistance(Double(x) + 0.5, Double(y) + 0.5), 0), 1)) }
+                guard k > 0 else { continue }
+                let si = ((y - area.y) * area.width + (x - area.x)) * 4
+                let a = content[si + 3] * k
+                guard a > 0 else { continue }
+                let i = index(x, y), keep = 1 - a
+                pixels[i] = content[si] * k + pixels[i] * keep
+                pixels[i + 1] = content[si + 1] * k + pixels[i + 1] * keep
+                pixels[i + 2] = content[si + 2] * k + pixels[i + 2] * keep
+                pixels[i + 3] = a + pixels[i + 3] * keep
+            }
+        }
     }
 
     /// Draws an image stretched to `rect` (points), whose corners are rounded

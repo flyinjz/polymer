@@ -105,7 +105,9 @@ extension Canvas {
     /// behind it come from this canvas when they are all already drawn here
     /// (the region covers its reach), otherwise from the items before it
     /// drawn again offscreen, so a partial redraw matches a whole one.
-    mutating func drawBackdrop(_ list: DisplayList, _ itemIndex: Int, _ shape: RoundedRect, _ effect: BackdropEffect, region: PixelRect) {
+    /// `from` is where the items it can see start (0, or the first item of the layer it is in).
+    mutating func drawBackdrop(_ list: DisplayList, _ itemIndex: Int, _ shape: RoundedRect, _ effect: BackdropEffect,
+                               region: PixelRect, from: Int) {
         let item = list.items[itemIndex]
         let target = item.bounds.clamped(to: clip)
         guard !target.isEmpty else { return }
@@ -121,7 +123,7 @@ extension Canvas {
         } else {
             var off = Canvas(bounds: source, scale: scale, background: background)
             off.glyphCache = glyphCache
-            off.draw(list, in: source, upTo: itemIndex)
+            off.draw(list, in: source, range: from..<itemIndex)
             behind = off.pixels
         }
         let sigma = effect.blurRadius * scale
