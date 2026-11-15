@@ -395,3 +395,52 @@ func coverage(_ b: Bitmap, channel: Int = 0) -> Double {
         try Platform.files.write(PNG.encode(r.bitmap), to: Path.join(c.outputDirectory, "effects/glass-merging@2x.png"))
     },
 ]
+
+/// A sample screen for effects: a grid of artwork scrolling under a glass
+/// title bar and merged glass controls, with a material panel.
+public struct SampleGlassView: View {
+    let font: Font
+    let art: Bitmap
+    public var body: some View {
+        ZStack(alignment: .top) {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))], spacing: 12) {
+                    ForEach(0..<60, id: \.self) { i in
+                        VStack(spacing: 4) {
+                            Image(art).resizable().aspectRatio(1, contentMode: .fill).frame(width: 90, height: 90)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                            Text("Album \(i + 1)").lineLimit(1)
+                        }
+                    }
+                }
+                .padding(horizontal: 12, vertical: 56)
+            }
+            HStack {
+                Text("Albums").padding(horizontal: 14, vertical: 8).glassEffect(.regular, in: Capsule())
+                Spacer()
+                GlassEffectContainer(spacing: 14) {
+                    HStack(spacing: 6) {
+                        Text("Grid").padding(horizontal: 12, vertical: 8).glassEffect(.regular, in: Capsule())
+                        Text("List").padding(horizontal: 12, vertical: 8).glassEffect(.regular, in: Capsule())
+                    }
+                }
+            }
+            .padding(10)
+            VStack {
+                Spacer()
+                Text("Now playing").frame(maxWidth: .infinity).padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(10)
+            }
+        }
+        .font(font)
+        .frame(width: 420, height: 320)
+        .background(Color(white: 0.063))
+    }
+}
+
+@MainActor
+public func sampleGlass(root: String) throws -> SampleGlassView {
+    let face = try TextReference.font(root: root, "Geist-Regular.otf")
+    let art = try JPEG.decode(try Platform.files.read(Path.join(root, "Tests/Fixtures/Images/progressive-mandel.jpg")))
+    return SampleGlassView(font: Font(face, size: 13), art: art)
+}

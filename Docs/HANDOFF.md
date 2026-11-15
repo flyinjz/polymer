@@ -132,7 +132,9 @@ Current state of the work. Every session updates this before it ends.
   `tree <screen> [--click "text"] [--scroll N] [--key K]...` (steps are applied in
   the order given), `zoom <in> <out> x y w h factor`.
   Screens: `albums` (static), `counter` (state and buttons), `list` (a
-  scroll view of forty rows), `library` (a lazy stack of 20,000 rows). They live in
+  scroll view of forty rows), `library` (a lazy stack of 20,000 rows), `glass`
+  (session 4: an album grid under glass bars and a material panel; try
+  `polymer render glass out.png --scale 2 --scroll 140`). They live in
   `PolymerChecks/UIChecks.swift`; a real screen registry comes with
   PolymerApp.
 

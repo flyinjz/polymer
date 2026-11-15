@@ -181,10 +181,11 @@ public func sampleTree(_ name: String, root: String, scale: Double = 1) throws -
     case "counter": return ViewTree(try sampleCounter(root: root), environment: e)
     case "list": return ViewTree(try sampleList(root: root), environment: e)
     case "library": return ViewTree(try sampleLibrary(root: root), environment: e)
+    case "glass": return ViewTree(try sampleGlass(root: root), environment: e)
     default: return nil
     }
 }
-public let sampleScreenNames = ["albums", "counter", "list", "library"]
+public let sampleScreenNames = ["albums", "counter", "list", "library", "glass"]
 
 // MARK: Views used by the identity checks
 
