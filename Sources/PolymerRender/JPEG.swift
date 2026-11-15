@@ -10,13 +10,41 @@ public enum JPEG {
     /// Decodes a JPEG file to RGBA. Arithmetic-coded, lossless and 12-bit
     /// files are refused with an error that says so. Entropy-coded data that
     /// ends early decodes as zeros, as in libjpeg (a partial image, not an error).
-    public static func decode(_ data: [UInt8]) throws(ImageError) -> Bitmap {
+    ///
+    /// `scale` decodes directly at 1/2, 1/4 or 1/8 of the size with libjpeg's
+    /// scaled inverse DCTs (pixels identical to `djpeg -scale`), far faster than
+    /// decoding whole and shrinking: for thumbnails. The EXIF orientation is
+    /// applied unless `applyOrientation` is false (`orientation(of:)` reads it).
+    public static func decode(_ data: [UInt8], scale: JPEGScale = .full, applyOrientation: Bool = true) throws(ImageError) -> Bitmap {
         var d = JPEGDecoder(data: data)
-        return try d.decode()
+        d.idctSize = scale.rawValue
+        let b = try d.decode()
+        return applyOrientation ? b.applyingOrientation(d.orientation) : b
+    }
+
+    /// The EXIF orientation (1 to 8; 1 when there is none), without decoding the image.
+    public static func orientation(of data: [UInt8]) -> Int {
+        var d = JPEGDecoder(data: data)
+        d.headerOnly = true
+        _ = try? d.decode()
+        return d.orientation
+    }
+
+    /// The largest reduction whose image still covers `width` x `height` pixels, for an image `imageWidth` x `imageHeight`.
+    public static func scale(imageWidth: Int, imageHeight: Int, covering width: Int, _ height: Int) -> JPEGScale {
+        for s in [JPEGScale.eighth, .quarter, .half] where (imageWidth * s.rawValue + 7) / 8 >= width && (imageHeight * s.rawValue + 7) / 8 >= height {
+            return s
+        }
+        return .full
     }
 
     /// True when `data` starts like a JPEG file.
     public static func matches(_ data: [UInt8]) -> Bool { data.count > 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF }
+}
+
+/// Sizes a JPEG decodes at directly: the raw value is the inverse DCT's size (8 is whole).
+public enum JPEGScale: Int, Sendable, CaseIterable {
+    case full = 8, half = 4, quarter = 2, eighth = 1
 }
 
 /// Zigzag position → natural (row-major) position; extra entries absorb corrupt run lengths.
@@ -93,6 +121,12 @@ struct JPEGDecoder {
     var hmax = 1, vmax = 1, mcusX = 0, mcusY = 0
     var restartInterval = 0
     var sawJFIF = false, adobeTransform: Int? = nil
+    /// Output scale: the smallest inverse DCT size (8, 4, 2 or 1), as libjpeg's `min_DCT_scaled_size`.
+    var idctSize = 8
+    /// EXIF orientation, 1 when absent.
+    var orientation = 1
+    /// Stop at the first frame header (for `JPEG.orientation`).
+    var headerOnly = false
     // Entropy decoding.
     var acc: UInt64 = 0, accBits = 0, atMarker = false
     var eobrun = 0
@@ -129,6 +163,7 @@ struct JPEGDecoder {
                     guard !frameSeen else { throw ImageError("JPEG file has more than one frame") }
                     try readFrame(body, end, progressive: marker == 0xC2)
                     frameSeen = true
+                    if headerOnly { return Bitmap(width: 0, height: 0) }
                 case 0xC3, 0xC5, 0xC6, 0xC7, 0xCB, 0xCD, 0xCE, 0xCF:
                     throw ImageError("lossless and hierarchical JPEG are not supported")
                 case 0xC9, 0xCA:
@@ -145,6 +180,7 @@ struct JPEGDecoder {
                     continue
                 case 0xE0:
                     if length >= 7, data[body] == 0x4A, data[body + 1] == 0x46, data[body + 2] == 0x49, data[body + 3] == 0x46 { sawJFIF = true }
+                case 0xE1: readExif(body, end)
                 case 0xEE:
                     if length >= 14, data[body] == 0x41, data[body + 1] == 0x64, data[body + 2] == 0x6F, data[body + 3] == 0x62 {
                         adobeTransform = Int(data[body + 11])
@@ -220,6 +256,32 @@ struct JPEGDecoder {
             }
             quant[tq] = t
             p += 1 + 64 * (pq + 1)
+        }
+    }
+
+    /// Reads the orientation from an EXIF segment (APP1): a TIFF header and its first directory.
+    mutating func readExif(_ body: Int, _ end: Int) {
+        guard end - body >= 14, Array(data[body..<(body + 6)]) == [0x45, 0x78, 0x69, 0x66, 0, 0] else { return }
+        let t = body + 6
+        let little: Bool
+        switch (data[t], data[t + 1]) {
+        case (0x49, 0x49): little = true
+        case (0x4D, 0x4D): little = false
+        default: return
+        }
+        func u16(_ p: Int) -> Int? {
+            guard p >= t, p + 2 <= end else { return nil }
+            return little ? Int(data[p]) | Int(data[p + 1]) << 8 : Int(data[p]) << 8 | Int(data[p + 1])
+        }
+        func u32(_ p: Int) -> Int? {
+            guard let a = u16(p), let b = u16(p + 2) else { return nil }
+            return little ? a | b << 16 : a << 16 | b
+        }
+        guard let ifd = u32(t + 4), let count = u16(t + ifd) else { return }
+        for i in 0..<min(count, 512) {
+            let e = t + ifd + 2 + 12 * i
+            guard let tag = u16(e), let type = u16(e + 2) else { return }
+            if tag == 0x0112, type == 3, let v = u16(e + 8), (1...8).contains(v) { orientation = v; return }
         }
     }
 
@@ -470,11 +532,20 @@ struct JPEGDecoder {
 
     // MARK: Output
 
-    /// Each component's samples after the inverse DCT, at its own resolution
+    /// A component's inverse DCT size: libjpeg-turbo doubles it from the
+    /// output scale while that keeps whole upsampling ratios, so subsampled
+    /// chroma often needs no upsampling at reduced scales (jdmaster.c).
+    func dctSize(_ c: JPEGComponent) -> Int {
+        var s = idctSize
+        while s < 8, (hmax * idctSize) % (c.h * s * 2) == 0, (vmax * idctSize) % (c.v * s * 2) == 0 { s *= 2 }
+        return s
+    }
+
+    /// Each component's samples after the inverse DCT, `s` x `s` per block
     /// (padded to whole blocks).
-    func plane(_ c: JPEGComponent) -> [UInt8] {
-        let stride = c.blocksPerLine * 8
-        var out = [UInt8](repeating: 0, count: stride * c.blocksPerColumn * 8)
+    func plane(_ c: JPEGComponent, _ s: Int) -> [UInt8] {
+        let stride = c.blocksPerLine * s
+        var out = [UInt8](repeating: 0, count: stride * c.blocksPerColumn * s)
         let q = c.quant ?? quant[c.tq]
         // Only the blocks that cover the image are needed.
         let bw = min(c.blocksPerLine, (c.width + 7) / 8), bh = min(c.blocksPerColumn, (c.height + 7) / 8)
@@ -485,7 +556,13 @@ struct JPEGDecoder {
                     ws.withUnsafeMutableBufferPointer { ws in
                         for by in 0..<bh {
                             for bx in 0..<bw {
-                                idctIslow(coef, (by * c.blocksPerLine + bx) * 64, q, ws, out, (by * 8) * stride + bx * 8, stride)
+                                let block = (by * c.blocksPerLine + bx) * 64, o = (by * s) * stride + bx * s
+                                switch s {
+                                case 8: idctIslow(coef, block, q, ws, out, o, stride)
+                                case 4: idct4x4(coef, block, q, ws, out, o, stride)
+                                case 2: idct2x2(coef, block, q, ws, out, o, stride)
+                                default: idct1x1(coef, block, q, out, o)
+                                }
                             }
                         }
                     }
@@ -496,19 +573,25 @@ struct JPEGDecoder {
     }
 
     func output() -> Bitmap {
-        // Planes at full resolution (upsampled where needed).
+        // Output size (libjpeg's output_width and output_height).
+        let ow = (width * idctSize + 7) / 8, oh = (height * idctSize + 7) / 8
+        // Planes at the output size (upsampled where needed).
         var planes: [[UInt8]] = []
         for c in components {
-            let p = plane(c)
-            let stride = c.blocksPerLine * 8
-            if c.h == hmax, c.v == vmax {
-                planes.append(crop(p, stride))
+            let s = dctSize(c)
+            let p = plane(c, s)
+            let stride = c.blocksPerLine * s
+            let hr = hmax * idctSize / (c.h * s), vr = vmax * idctSize / (c.v * s)
+            if hr == 1, vr == 1 {
+                planes.append(crop(p, stride, ow, oh))
             } else {
-                planes.append(upsample(p, stride, c))
+                // The component's size at this scale (libjpeg's downsampled_width and height).
+                let cw = (width * c.h * s + hmax * 8 - 1) / (hmax * 8), ch = (height * c.v * s + vmax * 8 - 1) / (vmax * 8)
+                planes.append(upsample(p, stride, cw, ch, hr, vr, ow, oh))
             }
         }
-        var px = [UInt8](repeating: 255, count: width * height * 4)
-        let n = width * height
+        var px = [UInt8](repeating: 255, count: ow * oh * 4)
+        let n = ow * oh
         switch components.count {
         case 1:
             for i in 0..<n { let y = planes[0][i]; px[4 * i] = y; px[4 * i + 1] = y; px[4 * i + 2] = y }
@@ -538,26 +621,26 @@ struct JPEGDecoder {
                 px[4 * i] = mul(c.0, k); px[4 * i + 1] = mul(c.1, k); px[4 * i + 2] = mul(c.2, k)
             }
         }
-        return Bitmap(width: width, height: height, pixels: px)
+        return Bitmap(width: ow, height: oh, pixels: px)
     }
 
-    func crop(_ p: [UInt8], _ stride: Int) -> [UInt8] {
+    func crop(_ p: [UInt8], _ stride: Int, _ width: Int, _ height: Int) -> [UInt8] {
         if stride == width { return Array(p[0..<(width * height)]) }
         var out = [UInt8](repeating: 0, count: width * height)
         for y in 0..<height { for x in 0..<width { out[y * width + x] = p[y * stride + x] } }
         return out
     }
 
-    /// Upsamples a component to the image's size as libjpeg-turbo does:
-    /// triangle ("fancy") filters for 2x1, 2x2 and 1x2, replication otherwise.
-    func upsample(_ p: [UInt8], _ stride: Int, _ c: JPEGComponent) -> [UInt8] {
-        let hr = hmax / c.h, vr = vmax / c.v
-        let cw = c.width, ch = c.height
+    /// Upsamples a component (`cw` x `ch` samples) by `hr` x `vr` to `width` x `height`
+    /// as libjpeg-turbo does: triangle ("fancy") filters for 2x1, 2x2 and 1x2, replication otherwise.
+    func upsample(_ p: [UInt8], _ stride: Int, _ cw: Int, _ ch: Int, _ hr: Int, _ vr: Int, _ width: Int, _ height: Int) -> [UInt8] {
         var out = [UInt8](repeating: 0, count: width * height)
         @inline(__always) func at(_ x: Int, _ y: Int) -> Int { Int(p[y * stride + x]) }
         // One output row from input row `y` (and its neighbour `y2` for vertical filters).
         var row = [Int](repeating: 0, count: cw * hr + 2)
-        if hr == 2, vr == 1, cw > 2 {
+        // libjpeg-turbo filters only above 1/8 scale (jdsample.c: min_DCT_scaled_size > 1).
+        let fancy = idctSize > 1
+        if fancy, hr == 2, vr == 1, cw > 2 {
             for y in 0..<height {
                 let iy = y
                 row[0] = at(0, iy)
@@ -571,7 +654,7 @@ struct JPEGDecoder {
                 row[2 * cw - 1] = at(cw - 1, iy)
                 for x in 0..<width { out[y * width + x] = UInt8(row[x]) }
             }
-        } else if hr == 2, vr == 2, cw > 2 {
+        } else if fancy, hr == 2, vr == 2, cw > 2 {
             for y in 0..<height {
                 let iy = y / 2
                 let ny = y % 2 == 0 ? max(iy - 1, 0) : min(iy + 1, ch - 1)
@@ -590,7 +673,7 @@ struct JPEGDecoder {
                 row[2 * cw - 1] = (this * 4 + 7) >> 4
                 for x in 0..<width { out[y * width + x] = UInt8(row[x]) }
             }
-        } else if hr == 1, vr == 2 {
+        } else if fancy, hr == 1, vr == 2 {
             for y in 0..<height {
                 let iy = y / 2
                 let upper = y % 2 == 0
@@ -709,5 +792,123 @@ private func idctIslow(_ coef: UnsafeBufferPointer<Int16>, _ offset: Int, _ q: U
         out[o + 1] = limit(descale(tmp11 &+ tmp2, shift)); out[o + 6] = limit(descale(tmp11 &- tmp2, shift))
         out[o + 2] = limit(descale(tmp12 &+ tmp1, shift)); out[o + 5] = limit(descale(tmp12 &- tmp1, shift))
         out[o + 3] = limit(descale(tmp13 &+ tmp0, shift)); out[o + 4] = limit(descale(tmp13 &- tmp0, shift))
+    }
+}
+
+/// libjpeg's 4x4 inverse DCT for output at 1/2 size (jidctred.c), the same arithmetic.
+private func idct4x4(_ coef: UnsafeBufferPointer<Int16>, _ offset: Int, _ q: UnsafeBufferPointer<Int32>,
+                     _ ws: UnsafeMutableBufferPointer<Int32>, _ out: UnsafeMutableBufferPointer<UInt8>,
+                     _ outOffset: Int, _ stride: Int) {
+    let constBits: Int32 = 13, pass1Bits: Int32 = 2
+    let f0211: Int32 = 1730, f0509: Int32 = 4176, f0601: Int32 = 4926, f0765: Int32 = 6270, f0899: Int32 = 7373
+    let f1061: Int32 = 8697, f1451: Int32 = 11893, f1847: Int32 = 15137, f2172: Int32 = 17799, f2562: Int32 = 20995
+    @inline(__always) func deq(_ i: Int) -> Int32 { Int32(coef[offset + i]) &* q[i] }
+    @inline(__always) func descale(_ x: Int32, _ n: Int32) -> Int32 { (x &+ (1 << (n - 1))) >> n }
+    for col in 0..<8 where col != 4 {   // column 4 is not needed for 4x4 output
+        if coef[offset + 8 + col] == 0, coef[offset + 16 + col] == 0, coef[offset + 24 + col] == 0,
+           coef[offset + 40 + col] == 0, coef[offset + 48 + col] == 0, coef[offset + 56 + col] == 0 {
+            let dc = deq(col) << pass1Bits
+            for r in 0..<4 { ws[r * 8 + col] = dc }
+            continue
+        }
+        let even0 = deq(col) << (constBits + 1)
+        let even2 = deq(16 + col) &* f1847 &+ deq(48 + col) &* -f0765
+        let tmp10 = even0 &+ even2, tmp12 = even0 &- even2
+        let z1 = deq(56 + col), z2 = deq(40 + col), z3 = deq(24 + col), z4 = deq(8 + col)
+        let tmp0 = z1 &* -f0211 &+ z2 &* f1451 &+ z3 &* -f2172 &+ z4 &* f1061
+        let tmp2 = z1 &* -f0509 &+ z2 &* -f0601 &+ z3 &* f0899 &+ z4 &* f2562
+        let n = constBits - pass1Bits + 1
+        ws[col] = descale(tmp10 &+ tmp2, n); ws[24 + col] = descale(tmp10 &- tmp2, n)
+        ws[8 + col] = descale(tmp12 &+ tmp0, n); ws[16 + col] = descale(tmp12 &- tmp0, n)
+    }
+    for row in 0..<4 {
+        let w = row * 8, o = outOffset + row * stride
+        if ws[w + 1] == 0, ws[w + 2] == 0, ws[w + 3] == 0, ws[w + 5] == 0, ws[w + 6] == 0, ws[w + 7] == 0 {
+            let v = jpegLimit(descale(ws[w], pass1Bits + 3))
+            for i in 0..<4 { out[o + i] = v }
+            continue
+        }
+        let even0 = ws[w] << (constBits + 1)
+        let even2 = ws[w + 2] &* f1847 &+ ws[w + 6] &* -f0765
+        let tmp10 = even0 &+ even2, tmp12 = even0 &- even2
+        let z1 = ws[w + 7], z2 = ws[w + 5], z3 = ws[w + 3], z4 = ws[w + 1]
+        let tmp0 = z1 &* -f0211 &+ z2 &* f1451 &+ z3 &* -f2172 &+ z4 &* f1061
+        let tmp2 = z1 &* -f0509 &+ z2 &* -f0601 &+ z3 &* f0899 &+ z4 &* f2562
+        let n = constBits + pass1Bits + 3 + 1
+        out[o] = jpegLimit(descale(tmp10 &+ tmp2, n)); out[o + 3] = jpegLimit(descale(tmp10 &- tmp2, n))
+        out[o + 1] = jpegLimit(descale(tmp12 &+ tmp0, n)); out[o + 2] = jpegLimit(descale(tmp12 &- tmp0, n))
+    }
+}
+
+/// libjpeg's 2x2 inverse DCT for output at 1/4 size (jidctred.c).
+private func idct2x2(_ coef: UnsafeBufferPointer<Int16>, _ offset: Int, _ q: UnsafeBufferPointer<Int32>,
+                     _ ws: UnsafeMutableBufferPointer<Int32>, _ out: UnsafeMutableBufferPointer<UInt8>,
+                     _ outOffset: Int, _ stride: Int) {
+    let constBits: Int32 = 13, pass1Bits: Int32 = 2
+    let f0720: Int32 = 5906, f0850: Int32 = 6967, f1272: Int32 = 10426, f3624: Int32 = 29692
+    @inline(__always) func deq(_ i: Int) -> Int32 { Int32(coef[offset + i]) &* q[i] }
+    @inline(__always) func descale(_ x: Int32, _ n: Int32) -> Int32 { (x &+ (1 << (n - 1))) >> n }
+    for col in [0, 1, 3, 5, 7] {   // columns 2, 4 and 6 are not needed for 2x2 output
+        if coef[offset + 8 + col] == 0, coef[offset + 24 + col] == 0, coef[offset + 40 + col] == 0, coef[offset + 56 + col] == 0 {
+            let dc = deq(col) << pass1Bits
+            ws[col] = dc; ws[8 + col] = dc
+            continue
+        }
+        let tmp10 = deq(col) << (constBits + 2)
+        let tmp0 = deq(56 + col) &* -f0720 &+ deq(40 + col) &* f0850 &+ deq(24 + col) &* -f1272 &+ deq(8 + col) &* f3624
+        let n = constBits - pass1Bits + 2
+        ws[col] = descale(tmp10 &+ tmp0, n); ws[8 + col] = descale(tmp10 &- tmp0, n)
+    }
+    for row in 0..<2 {
+        let w = row * 8, o = outOffset + row * stride
+        if ws[w + 1] == 0, ws[w + 3] == 0, ws[w + 5] == 0, ws[w + 7] == 0 {
+            let v = jpegLimit(descale(ws[w], pass1Bits + 3))
+            out[o] = v; out[o + 1] = v
+            continue
+        }
+        let tmp10 = ws[w] << (constBits + 2)
+        let tmp0 = ws[w + 7] &* -f0720 &+ ws[w + 5] &* f0850 &+ ws[w + 3] &* -f1272 &+ ws[w + 1] &* f3624
+        let n = constBits + pass1Bits + 3 + 2
+        out[o] = jpegLimit(descale(tmp10 &+ tmp0, n)); out[o + 1] = jpegLimit(descale(tmp10 &- tmp0, n))
+    }
+}
+
+/// libjpeg's 1x1 inverse DCT for output at 1/8 size: the block's mean.
+private func idct1x1(_ coef: UnsafeBufferPointer<Int16>, _ offset: Int, _ q: UnsafeBufferPointer<Int32>,
+                     _ out: UnsafeMutableBufferPointer<UInt8>, _ outOffset: Int) {
+    let dc = Int32(coef[offset]) &* q[0]
+    out[outOffset] = jpegLimit((dc &+ 4) >> 3)
+}
+
+/// libjpeg's range limit: the low 10 bits, read as signed, plus 128, clamped.
+@inline(__always) private func jpegLimit(_ x: Int32) -> UInt8 {
+    var v = Int(x) & 1023
+    if v >= 512 { v -= 1024 }
+    return UInt8(min(max(v + 128, 0), 255))
+}
+
+extension Bitmap {
+    /// The image turned as an EXIF orientation (1 to 8) says it should be shown.
+    public func applyingOrientation(_ orientation: Int) -> Bitmap {
+        guard (2...8).contains(orientation) else { return self }
+        let swap = orientation >= 5
+        let ow = swap ? height : width, oh = swap ? width : height
+        var out = [UInt8](repeating: 0, count: pixels.count)
+        for y in 0..<oh {
+            for x in 0..<ow {
+                let (sx, sy): (Int, Int) = switch orientation {
+                case 2: (ow - 1 - x, y)
+                case 3: (ow - 1 - x, oh - 1 - y)
+                case 4: (x, oh - 1 - y)
+                case 5: (y, x)
+                case 6: (y, ow - 1 - x)
+                case 7: (oh - 1 - y, ow - 1 - x)
+                default: (oh - 1 - y, x)
+                }
+                let s = (sy * width + sx) * 4, d = (y * ow + x) * 4
+                out[d] = pixels[s]; out[d + 1] = pixels[s + 1]; out[d + 2] = pixels[s + 2]; out[d + 3] = pixels[s + 3]
+            }
+        }
+        return Bitmap(width: ow, height: oh, pixels: out)
     }
 }

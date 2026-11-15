@@ -65,6 +65,13 @@ Current state of the work. Every session updates this before it ends.
   default output (same integer IDCT, fancy upsampling and colour tables),
   checked against `djpeg` decodes in `Tests/Fixtures/Images` (`render.jpeg`).
   About 1.3 ms for a 320x240 progressive file in release (no SIMD yet).
+  Session 5: `JPEG.decode(data, scale: .half/.quarter/.eighth)` uses libjpeg's
+  reduced IDCTs and per-component sizes, identical to `djpeg -scale` (check
+  `render.jpeg-scaled`; no fancy upsampling at 1/8, as in turbo); EXIF
+  orientation is applied by default (`JPEG.orientation(of:)`,
+  `Bitmap.applyingOrientation`); `JPEG.scale(imageWidth:imageHeight:covering:)`
+  picks the reduction for a thumbnail. The "Not yet" below is now arithmetic
+  coding and 12-bit only.
   Not yet: EXIF orientation, decoding at 1/2, 1/4, 1/8 size (libjpeg's
   scaled IDCT, for thumbnails), arithmetic coding, 12-bit. CMYK and YCCK
   follow the Adobe convention (inverted) but have no reference fixture yet.

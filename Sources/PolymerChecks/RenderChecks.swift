@@ -52,6 +52,69 @@ import PolymerText
         for _ in 0..<10 { _ = try JPEG.decode(mandel) }
         c.note("progressive 320x240: \((clock.now - start).seconds * 100) ms per decode")
     },
+
+    Check("render.jpeg-scaled") { c in
+        let dir = Path.join(c.root, "Tests/Fixtures/Images")
+        let scales: [(JPEGScale, String)] = [(.half, "half"), (.quarter, "quarter"), (.eighth, "eighth")]
+        for name in ["baseline-420", "baseline-422", "baseline-444", "baseline-440", "baseline-411", "grey", "rgb", "progressive-420"] {
+            let data = try Platform.files.read(Path.join(dir, name + ".jpg"))
+            for (scale, suffix) in scales {
+                // References: `djpeg -scale 1/2` (and 1/4, 1/8) from libjpeg-turbo 3.2.1.
+                let reference = try PNG.decode(try Platform.files.read(Path.join(dir, "\(name)-\(suffix).png")))
+                let ours: Bitmap
+                do { ours = try JPEG.decode(data, scale: scale) } catch { c.fail("\(name) at \(suffix): \(error)"); continue }
+                guard ours.width == reference.width, ours.height == reference.height else {
+                    c.fail("\(name) at \(suffix): \(ours.width)x\(ours.height), expected \(reference.width)x\(reference.height)"); continue
+                }
+                var differing = 0, worst = 0
+                for i in 0..<ours.pixels.count where ours.pixels[i] != reference.pixels[i] {
+                    differing += 1; worst = max(worst, abs(Int(ours.pixels[i]) - Int(reference.pixels[i])))
+                }
+                c.expect(differing == 0, "\(name) at \(suffix): \(differing) values differ from libjpeg-turbo, by up to \(worst)")
+            }
+        }
+        c.expectEqual(JPEG.scale(imageWidth: 1200, imageHeight: 1200, covering: 150, 150), .eighth, "a 150-pixel thumbnail of 1200: 1/8")
+        c.expectEqual(JPEG.scale(imageWidth: 1200, imageHeight: 1200, covering: 151, 100), .quarter, "151 wide: 1/4")
+        c.expectEqual(JPEG.scale(imageWidth: 600, imageHeight: 400, covering: 600, 400), .full, "the whole size: full")
+
+        // EXIF orientation: an APP1 segment written after the start marker, in both byte orders.
+        let plain = try Platform.files.read(Path.join(dir, "baseline-444.jpg"))
+        let upright = try JPEG.decode(plain)
+        func withOrientation(_ o: Int, little: Bool) -> [UInt8] {
+            func u16(_ v: Int) -> [UInt8] { little ? [UInt8(v & 255), UInt8(v >> 8)] : [UInt8(v >> 8), UInt8(v & 255)] }
+            func u32(_ v: Int) -> [UInt8] { little ? u16(v & 0xffff) + u16(v >> 16) : u16(v >> 16) + u16(v & 0xffff) }
+            let tiff: [UInt8] = (little ? [0x49, 0x49] : [0x4D, 0x4D]) + u16(42) + u32(8)
+                + u16(1) + u16(0x0112) + u16(3) + u32(1) + u16(o) + u16(0) + u32(0)
+            let body: [UInt8] = [0x45, 0x78, 0x69, 0x66, 0, 0] + tiff
+            let n = body.count + 2
+            return [0xFF, 0xD8, 0xFF, 0xE1, UInt8(n >> 8), UInt8(n & 255)] + body + Array(plain[2...])
+        }
+        for o in 1...8 {
+            for little in [true, false] {
+                let file = withOrientation(o, little: little)
+                c.expectEqual(JPEG.orientation(of: file), o, "orientation \(o) read (\(little ? "II" : "MM"))")
+                let turned = try JPEG.decode(file)
+                c.expect(turned == upright.applyingOrientation(o), "orientation \(o) applied")
+                c.expect(try JPEG.decode(file, applyOrientation: false) == upright, "orientation \(o) left alone when asked")
+            }
+        }
+        // Orientation 6 turns clockwise: the top-left pixel ends at the top right.
+        let r6 = upright.applyingOrientation(6)
+        c.expect(r6.width == upright.height && r6.height == upright.width, "orientation 6 swaps width and height")
+        c.expect(r6[r6.width - 1, 0] == upright[0, 0] && r6[0, 0] == upright[0, upright.height - 1], "orientation 6 turns a quarter clockwise")
+        c.expectEqual(JPEG.orientation(of: plain), 1, "no EXIF: orientation 1")
+
+        // Speed, for the record: the largest fixture at each size.
+        let mandel = try Platform.files.read(Path.join(dir, "progressive-mandel.jpg"))
+        let clock = ContinuousClock()
+        var line = "progressive 320x240 per decode:"
+        for (scale, suffix) in [(JPEGScale.full, "full")] + scales {
+            let start = clock.now
+            for _ in 0..<10 { _ = try JPEG.decode(mandel, scale: scale) }
+            line += " \(suffix) \(Double(Int((clock.now - start).seconds * 1000)) / 10) ms"
+        }
+        c.note(line)
+    },
     Check("render.png") { c in
         var b = Bitmap(width: 37, height: 11)
         for i in 0..<b.pixels.count { b.pixels[i] = UInt8(truncatingIfNeeded: i &* 31 &+ i / 7) }
