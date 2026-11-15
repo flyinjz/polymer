@@ -20,6 +20,7 @@ deliberate difference is listed here, with the reason.
 |---|---|---|
 | `Font.system(...)`, `.body`, ... | `Font(face, size:)` with a loaded `FontFace` | No system fonts: apps use the bundled faces. Named styles come with PolymerDesign tokens. |
 | `Text` with attributed and localised strings | `Text(String)` | Plain strings for now. |
+| `Image("name")`, `Image(systemName:)`, `Image(nsImage:)`, `Image(cgImage:scale:label:)` | `Image(bitmap, scale:)` with a decoded `Bitmap` (`PNG.decode`, `JPEG.decode`) | No asset catalogues or system symbols; icons come with PolymerDesign. `resizable()`, `aspectRatio`, `scaledToFit()`, `scaledToFill()` as in SwiftUI. `.interpolation`, `.renderingMode`, accessibility labels and resizing insets not yet. |
 | `Button` with a default style | `Button` draws only its label (`PlainButtonStyle`) | The house style comes with PolymerDesign. |
 | `ButtonStyle`, `ButtonStyleConfiguration` with `role` | Same, without `role` | `@Environment` and `@State` work inside a style. |
 | Pointer events from the system | `ViewTree.pointerMoved(to:)`, `pointerDown(at:)`, `pointerUp(at:)`, `pointerExited()`, `point(ofText:)` | Windows and headless tools drive the same entry points. `.onHover` uses the view's frame. |

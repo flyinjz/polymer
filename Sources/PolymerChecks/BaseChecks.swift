@@ -17,6 +17,13 @@ import PolymerBase
             c.expectClose(Math.exp(x) / expected, 1, tolerance: 4e-16, "exp(\(x))")
         }
         c.expectClose(pow(base: 2, 10), 1024, tolerance: 1e-12, "2^10")
+        // Reference values (correctly rounded).
+        for (x, s, co) in [(1.0, 0.8414709848078965, 0.5403023058681398), (-2.5, -0.5984721441039565, -0.8011436155469337),
+                           (0.1, 0.09983341664682815, 0.9950041652780258), (100.0, -0.5063656411097588, 0.8623188722876839),
+                           (3.141592653589793, 1.2246467991473532e-16, -1.0)] {
+            c.expectClose(Math.sin(x), s, tolerance: 2e-16 * max(1, abs(x)), "sin(\(x))")
+            c.expectClose(Math.cos(x), co, tolerance: 2e-16 * max(1, abs(x)), "cos(\(x))")
+        }
     },
     Check("base.color") { c in
         for v in 0..<256 {

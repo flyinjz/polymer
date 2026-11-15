@@ -117,4 +117,48 @@ public enum Math {
         }
         return Double(sign: .plus, exponent: Int(k), significand: sum)
     }
+
+    /// Sine, accurate to about 1 ulp for |x| below about 1e5 (fdlibm's kernels
+    /// after reducing by multiples of pi/2).
+    @inlinable public static func sin(_ x: Double) -> Double {
+        let (r, q) = reduceQuarterTurns(x)
+        switch q & 3 {
+        case 0: return sinKernel(r)
+        case 1: return cosKernel(r)
+        case 2: return -sinKernel(r)
+        default: return -cosKernel(r)
+        }
+    }
+
+    /// Cosine, as `sin`.
+    @inlinable public static func cos(_ x: Double) -> Double {
+        let (r, q) = reduceQuarterTurns(x)
+        switch q & 3 {
+        case 0: return cosKernel(r)
+        case 1: return -sinKernel(r)
+        case 2: return -cosKernel(r)
+        default: return sinKernel(r)
+        }
+    }
+
+    /// x = q * pi/2 + r with |r| <= pi/4 (Cody-Waite, pi/2 in two parts).
+    @inlinable static func reduceQuarterTurns(_ x: Double) -> (Double, Int) {
+        let k = (x * 6.36619772367581382433e-01).rounded()
+        let r = (x - k * 1.57079632673412561417e+00) - k * 6.07710050650619224932e-11
+        return (r, Int(k))
+    }
+
+    @inlinable static func sinKernel(_ x: Double) -> Double {
+        let z = x * x
+        let p = -1.66666666666666324348e-01 + z * (8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04
+            + z * (2.75573137070700676789e-06 + z * (-2.50507602534068634195e-08 + z * 1.58969099521155010221e-10))))
+        return x + x * z * p
+    }
+
+    @inlinable static func cosKernel(_ x: Double) -> Double {
+        let z = x * x
+        let p = 4.16666666666666019037e-02 + z * (-1.38888888888741095749e-03 + z * (2.48015872894767294178e-05
+            + z * (-2.75573143513906633035e-07 + z * (2.08757232129817482790e-09 + z * -1.13596475577881948265e-11))))
+        return 1 - 0.5 * z + z * z * p
+    }
 }

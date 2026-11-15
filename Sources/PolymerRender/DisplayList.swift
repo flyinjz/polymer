@@ -6,13 +6,15 @@ import PolymerBase
 import PolymerText
 
 /// One drawing operation, with the clip and origin in force when it was recorded.
-public struct DisplayItem: Hashable, Sendable {
-    public enum Operation: Hashable, Sendable {
+public struct DisplayItem: Hashable {
+    public enum Operation: Hashable {
         /// A rectangle in points, filled with partial coverage at its edges.
         case rect(Rect, Color)
         /// A path in points (non-zero winding, anti-aliased).
         case path(Path, Color)
         case glyphs(GlyphRun)
+        /// An image stretched to a rectangle in points (corners rounded to whole pixels).
+        case image(RasterImage, Rect)
     }
     public var operation: Operation
     /// Added to every position, in points (`Canvas.origin`).
@@ -46,7 +48,7 @@ public struct GlyphRun: Hashable, Sendable {
 /// Drawing operations in order, recorded with the same calls as `Canvas`
 /// (`fill`, `drawGlyphs`, `clipped`, `translated`, `isVisible`) and drawn
 /// with `Canvas.draw(_:in:)`. Operations that would draw nothing are left out.
-public struct DisplayList: Sendable {
+public struct DisplayList {
     /// Size in pixels.
     public let width: Int
     public let height: Int
@@ -130,6 +132,11 @@ public struct DisplayList: Sendable {
         add(.glyphs(run), PixelRect.covering(box, origin: origin, scale: scale).outset(by: 2))
     }
 
+    /// Records an image stretched to `rect` (points).
+    public mutating func draw(_ image: RasterImage, in rect: Rect) {
+        add(.image(image, rect), PixelRect.snapping(rect, origin: origin, scale: scale))
+    }
+
     private mutating func add(_ op: DisplayItem.Operation, _ extent: PixelRect) {
         let bounds = extent.clamped(to: clip)
         guard !bounds.isEmpty else { return }
@@ -186,6 +193,13 @@ extension PixelRect {
         let x0 = Int(((rect.minX + origin.x) * scale).rounded(.down)), y0 = Int(((rect.minY + origin.y) * scale).rounded(.down))
         let x1 = Int(((rect.maxX + origin.x) * scale).rounded(.up)), y1 = Int(((rect.maxY + origin.y) * scale).rounded(.up))
         return PixelRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+
+    /// `rect` (points) moved by `origin`, in pixels, each corner rounded to the nearest pixel.
+    static func snapping(_ rect: Rect, origin: Point, scale: Double) -> PixelRect {
+        let x0 = Int(((rect.minX + origin.x) * scale).rounded()), y0 = Int(((rect.minY + origin.y) * scale).rounded())
+        let x1 = Int(((rect.maxX + origin.x) * scale).rounded()), y1 = Int(((rect.maxY + origin.y) * scale).rounded())
+        return PixelRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
     }
 
     /// The part inside `r`, with the same arithmetic as `Canvas.clipped`.

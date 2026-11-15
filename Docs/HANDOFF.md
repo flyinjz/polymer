@@ -66,7 +66,11 @@ Current state of the work. Every session updates this before it ends.
   - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`, cut
     to the height it is offered with an ellipsis on the last line that fits),
     `Color`, `Rectangle`, `Spacer`, `Divider`, `HStack`, `VStack`,
-    `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both).
+    `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both),
+    `Image` (session 4: a `Bitmap` at its own size or `resizable()`; drawn
+    through `RasterImage`, which keeps scaled copies so an unchanged image
+    is resampled once; Lanczos-3 in premultiplied values, widened when
+    shrinking; corners on whole pixels).
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
@@ -81,7 +85,8 @@ Current state of the work. Every session updates this before it ends.
     handlers do nothing and swallow the press, leave the Tab order, give up
     focus, and show "disabled" in the element tree. Button styles can use
     `@Environment` and `@State` (`LinksNestedProperties`).
-  - Modifiers: `padding`, `frame` (fixed and flexible), `background`,
+  - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
+    `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
     `onTapGesture`.
@@ -473,6 +478,11 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): images are resampled with Lanczos-3 (as image
+  editors do for quality) in premultiplied sRGB-encoded values, the space
+  the canvas blends in; image rectangles snap to whole pixels so a 1:1
+  image is drawn exactly. `Math.sin` and `Math.cos` are our own (fdlibm
+  kernels) so weights are identical on every OS.
 - 2026-11-14 (Windows 4): the JPEG decoder matches libjpeg-turbo bit for
   bit rather than just "closely": the same integer IDCT and upsampling, so
   a check can compare exactly, and album art looks the same as in apps

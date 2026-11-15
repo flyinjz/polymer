@@ -146,9 +146,34 @@ public struct Canvas {
             case .rect(let r, let c): fill(r, c)
             case .path(let p, let c): fill(p, c)
             case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
+            case .image(let img, let r): draw(img, in: r)
             }
         }
         clip = savedClip; origin = savedOrigin
+    }
+
+    /// Draws an image stretched to `rect` (points), whose corners are rounded
+    /// to whole pixels; the image is resampled to that many pixels (and the
+    /// result kept by the image for the next frame).
+    public mutating func draw(_ image: RasterImage, in rect: Rect) {
+        let r = PixelRect.snapping(rect, origin: origin, scale: scale)
+        guard !r.isEmpty, image.bitmap.width > 0, image.bitmap.height > 0 else { return }
+        let x0 = max(r.x, clip.x), y0 = max(r.y, clip.y)
+        let x1 = min(r.x + r.width, clip.x + clip.width), y1 = min(r.y + r.height, clip.y + clip.height)
+        guard x0 < x1, y0 < y1 else { return }
+        let b = image.scaled(width: r.width, height: r.height)
+        for y in y0..<y1 {
+            for x in x0..<x1 {
+                let s = ((y - r.y) * b.width + (x - r.x)) * 4
+                let a = Float(b.pixels[s + 3]) / 255
+                guard a > 0 else { continue }
+                let i = (y * width + x) * 4, k = 1 - a
+                pixels[i] = Float(b.pixels[s]) / 255 * a + pixels[i] * k
+                pixels[i + 1] = Float(b.pixels[s + 1]) / 255 * a + pixels[i + 1] * k
+                pixels[i + 2] = Float(b.pixels[s + 2]) / 255 * a + pixels[i + 2] * k
+                pixels[i + 3] = a + pixels[i + 3] * k
+            }
+        }
     }
 
     /// Sets every pixel of `region` to `color`, as a new canvas with that background.

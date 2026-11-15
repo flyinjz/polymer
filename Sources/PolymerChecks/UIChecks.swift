@@ -898,4 +898,77 @@ struct EquatableScreen: View {
             c.expect(t.render(background: bg) == drawnWhole(t), "\(name): partial frame after a click equals a whole draw")
         }
     },
+    Check("ui.image") { c in
+        // Red, green, blue, white; black, grey, transparent, half-transparent red.
+        let colors: [(UInt8, UInt8, UInt8, UInt8)] = [(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 255, 255),
+                                                      (0, 0, 0, 255), (128, 128, 128, 255), (0, 0, 0, 0), (255, 0, 0, 128)]
+        let small = Bitmap(width: 4, height: 2, pixels: colors.flatMap { [$0.0, $0.1, $0.2, $0.3] })
+        func line(_ tree: String, _ role: String) -> String {
+            tree.split(separator: "\n").first { $0.contains(role + " (") }.map { String($0.drop { $0 == " " }) } ?? ""
+        }
+
+        // Sizing, as in SwiftUI.
+        c.expectEqual(line(ImageRenderer(content: Image(small).frame(width: 40, height: 40)).elementTree, "Image"),
+                      "Image (18, 19, 4x2) 4x2 px", "not resizable: its own size whatever is offered")
+        c.expectEqual(line(ImageRenderer(content: Image(small, scale: 2)).elementTree, "Image"), "Image (0, 0, 2x1) 4x2 px",
+                      "an image for 2x screens takes half the points")
+        c.expectEqual(line(ImageRenderer(content: Image(small).resizable().frame(width: 100, height: 30)).elementTree, "Image"),
+                      "Image (0, 0, 100x30) 4x2 px", "resizable: stretched to the offer")
+        c.expectEqual(line(ImageRenderer(content: Image(small).resizable().aspectRatio(contentMode: .fit).frame(width: 100, height: 100)).elementTree, "Image"),
+                      "Image (0, 25, 100x50) 4x2 px", "fit keeps the shape inside")
+        c.expectEqual(line(ImageRenderer(content: Image(small).resizable().scaledToFill().frame(width: 100, height: 100)).elementTree, "Image"),
+                      "Image (-50, 0, 200x100) 4x2 px", "fill keeps the shape and covers")
+        c.expectEqual(line(ImageRenderer(content: Color.white.aspectRatio(2, contentMode: .fit).frame(width: 100, height: 100)).elementTree, "Color"),
+                      "Color (0, 25, 100x50) #FFFFFF", "an explicit ratio works on any view")
+        c.expectEqual(line(ImageRenderer(content: Image(small).resizable().aspectRatio(contentMode: .fit).frame(width: 60)).elementTree, "Image"),
+                      "Image (0, 0, 60x30) 4x2 px", "only a width offered: the height follows the shape")
+
+        // Pixels: at its own size, the image is drawn pixel for pixel.
+        c.expect(ImageRenderer(content: Image(small)).bitmap == small, "drawn exactly at 1:1, transparency included")
+        var twice = ImageRenderer(content: Image(small, scale: 2))
+        twice.scale = 2
+        c.expect(twice.bitmap == small, "a 2x image on a 2x screen is drawn 1:1")
+
+        // Resampling: a solid colour stays exactly that colour at any size, up or down.
+        let solid = Bitmap(width: 37, height: 23, fill: (200, 100, 50, 255))
+        for (w, h) in [(80.0, 80.0), (7, 5), (37, 11), (1, 1)] {
+            let b = ImageRenderer(content: Image(solid).resizable().frame(width: w, height: h)).bitmap
+            var off = 0
+            for y in 0..<b.height { for x in 0..<b.width where b[x, y] != (200, 100, 50, 255) { off += 1 } }
+            c.expectEqual(off, 0, "solid colour scaled to \(Int(w))x\(Int(h))")
+        }
+        // Shrinking keeps the average colour.
+        let photo = try JPEG.decode(try Platform.files.read(Path.join(c.root, "Tests/Fixtures/Images/progressive-mandel.jpg")))
+        let thumb = ImageRenderer(content: Image(photo).resizable().frame(width: 40, height: 30)).bitmap
+        func mean(_ b: Bitmap) -> (Double, Double, Double) {
+            var s = (0.0, 0.0, 0.0)
+            for y in 0..<b.height { for x in 0..<b.width { let p = b[x, y]; s.0 += Double(p.r); s.1 += Double(p.g); s.2 += Double(p.b) } }
+            let n = Double(b.width * b.height)
+            return (s.0 / n, s.1 / n, s.2 / n)
+        }
+        let (m0, m1) = (mean(photo), mean(thumb))
+        c.expect(abs(m0.0 - m1.0) < 2 && abs(m0.1 - m1.1) < 2 && abs(m0.2 - m1.2) < 2, "an 8x smaller copy keeps the average colour: \(m0) and \(m1)")
+        try Platform.files.createDirectory(Path.join(c.outputDirectory, "ui"))
+        try Platform.files.write(PNG.encode(thumb), to: Path.join(c.outputDirectory, "ui/image-thumbnail.png"))
+
+        // Fill and clip: nothing drawn outside the frame.
+        let clippedImage = ImageRenderer(content: Image(solid).resizable().scaledToFill().frame(width: 10, height: 10).clipped().padding(5)).bitmap
+        var outside = 0
+        for y in 0..<20 { for x in 0..<20 where (x < 5 || x >= 15 || y < 5 || y >= 15) && clippedImage[x, y].a != 0 { outside += 1 } }
+        c.expectEqual(outside, 0, "a filled image is clipped to its frame")
+
+        // Scaled copies are kept: an unchanged image costs no resampling and no drawing.
+        let tree = ViewTree(Image(photo).resizable().frame(width: 40, height: 30))
+        _ = tree.render()
+        tree.setRoot(Image(photo).resizable().frame(width: 40, height: 30))
+        _ = tree.render()
+        var images: [RasterImage] = []
+        for item in tree.displayList?.items ?? [] { if case .image(let i, _) = item.operation { images.append(i) } }
+        c.expectEqual(images.count, 1, "one image drawn")
+        c.expectEqual(images.first?.resampleCount, 1, "resampled once for two frames")
+        c.expect(tree.damage.isEmpty, "the same bitmap again draws nothing")
+        tree.setRoot(Image(solid).resizable().frame(width: 40, height: 30))
+        _ = tree.render()
+        c.expectEqual(tree.damage, [PixelRect(x: 0, y: 0, width: 40, height: 30)], "a new bitmap redraws the image's area")
+    },
 ]
