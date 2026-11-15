@@ -15,6 +15,8 @@ public struct DisplayItem: Hashable {
         case glyphs(GlyphRun)
         /// An image stretched to a rectangle in points (corners rounded to whole pixels).
         case image(RasterImage, Rect)
+        /// A backdrop effect inside a rounded rectangle in points (DESIGN section 11).
+        case backdrop(RoundedRect, BackdropEffect)
     }
     public var operation: Operation
     /// Added to every position, in points (`Canvas.origin`).
@@ -23,6 +25,8 @@ public struct DisplayItem: Hashable {
     public var clip: PixelRect
     /// Pixels the operation may change: its extent inside the clip, never empty.
     public var bounds: PixelRect
+    /// For backdrop effects: how many pixels around a point the effect reads (0 for everything else).
+    public var reach: Int = 0
 }
 
 /// Laid-out glyphs with the line's baseline-left at `position` (points).
@@ -137,10 +141,16 @@ public struct DisplayList {
         add(.image(image, rect), PixelRect.snapping(rect, origin: origin, scale: scale))
     }
 
-    private mutating func add(_ op: DisplayItem.Operation, _ extent: PixelRect) {
+    /// Records a backdrop effect inside `shape` (points): it filters what was recorded before it.
+    public mutating func drawBackdrop(_ shape: RoundedRect, _ effect: BackdropEffect) {
+        guard shape.rect.width > 0, shape.rect.height > 0 else { return }
+        add(.backdrop(shape, effect), PixelRect.covering(shape.rect, origin: origin, scale: scale), reach: effect.reach(scale: scale))
+    }
+
+    private mutating func add(_ op: DisplayItem.Operation, _ extent: PixelRect, reach: Int = 0) {
         let bounds = extent.clamped(to: clip)
         guard !bounds.isEmpty else { return }
-        items.append(DisplayItem(operation: op, origin: origin, clip: clip, bounds: bounds))
+        items.append(DisplayItem(operation: op, origin: origin, clip: clip, bounds: bounds, reach: reach))
     }
 
     // MARK: Damage
@@ -183,7 +193,30 @@ public struct DisplayList {
             rects.append(a[i].bounds)
         }
         for j in start..<endB where !matched[j - start] { rects.append(b[j].bounds) }
-        return PixelRect.merged(rects, within: fullRect)
+        return PixelRect.merged(Self.spreadThroughEffects(rects, a, b), within: fullRect)
+    }
+
+    /// A backdrop effect redraws wherever its input changed: each damaged
+    /// rectangle within an effect's reach damages the effect's pixels within
+    /// reach of it. Repeated, because effects can sit on effects.
+    static func spreadThroughEffects(_ damage: [PixelRect], _ old: [DisplayItem], _ new: [DisplayItem]) -> [PixelRect] {
+        let effects = (old + new).filter { $0.reach > 0 }
+        guard !effects.isEmpty, !damage.isEmpty else { return damage }
+        var rects = damage
+        for _ in 0..<8 {
+            var added = false
+            for e in effects {
+                let reachArea = e.bounds.outset(by: e.reach)
+                for d in rects where d.intersects(reachArea) {
+                    let more = d.outset(by: e.reach).clamped(to: e.bounds)
+                    if more.isEmpty || rects.contains(where: { $0.contains(more) }) { continue }
+                    rects.append(more)
+                    added = true
+                }
+            }
+            if !added { break }
+        }
+        return rects
     }
 }
 
@@ -226,6 +259,11 @@ extension PixelRect {
     }
 
     var area: Int { width * height }
+
+    /// True when `r` lies entirely inside.
+    func contains(_ r: PixelRect) -> Bool {
+        r.x >= x && r.y >= y && r.x + r.width <= x + width && r.y + r.height <= y + height
+    }
 
     /// Few rectangles covering `rects`: touching ones are joined, and past
     /// eight the two whose union adds the least area are joined, so a frame

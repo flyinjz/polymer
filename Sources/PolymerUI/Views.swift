@@ -1,4 +1,4 @@
-// Built-in leaf views: Text, Color, Rectangle, Spacer, Divider.
+// Built-in leaf views: Text, Color, Spacer, Divider. Shapes are in Shapes.swift.
 import PolymerBase
 import PolymerText
 import PolymerRender
@@ -101,16 +101,6 @@ extension Color: View, PrimitiveView {
     func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
         let n = (existing as? FillNode) ?? FillNode()
         n.color = self; n.name = "Color"
-        return n
-    }
-}
-
-/// A rectangle filled with the foreground colour.
-public struct Rectangle: View, PrimitiveView {
-    public init() {}
-    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
-        let n = (existing as? FillNode) ?? FillNode()
-        n.color = c.environment.foregroundColor; n.name = "Rectangle"
         return n
     }
 }

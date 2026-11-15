@@ -5,23 +5,35 @@ import PolymerBase
 import PolymerText
 
 public struct Canvas {
+    /// The pixels this canvas holds, in image coordinates (an offscreen canvas may cover only part of an image).
+    public let bounds: PixelRect
     /// Size in pixels.
     public let width: Int
     public let height: Int
     /// Pixels per point.
     public let scale: Double
     /// sRGB-encoded, premultiplied RGBA, row-major.
-    public private(set) var pixels: [Float]
+    public internal(set) var pixels: [Float]
+    /// What the canvas was filled with when made.
+    public let background: Color
     /// Glyph masks kept between draws; nil rasterises every glyph afresh (same pixels either way).
     public var glyphCache: GlyphCache?
     /// Drawing is limited to this pixel rectangle.
-    public private(set) var clip: PixelRect
+    public internal(set) var clip: PixelRect
     /// Added to every position drawn, in points (a scroll view moves its content this way).
-    public private(set) var origin: Point = .zero
+    public internal(set) var origin: Point = .zero
 
     public init(width: Int, height: Int, scale: Double = 1, background: Color = .clear) {
+        self.init(bounds: PixelRect(x: 0, y: 0, width: width, height: height), scale: scale, background: background)
+    }
+
+    /// A canvas holding only the pixels of `bounds` (image coordinates).
+    public init(bounds: PixelRect, scale: Double = 1, background: Color = .clear) {
+        self.bounds = bounds
+        let width = bounds.width, height = bounds.height
+        self.background = background
         self.width = width; self.height = height; self.scale = scale
-        clip = PixelRect(x: 0, y: 0, width: width, height: height)
+        clip = bounds
         let a = Float(background.opacity)
         let px: [Float] = [Float(background.red) * a, Float(background.green) * a, Float(background.blue) * a, a]
         var p = [Float](repeating: 0, count: width * height * 4)
@@ -57,6 +69,9 @@ public struct Canvas {
         return x1 > Double(clip.x) && x0 < Double(clip.x + clip.width) && y1 > Double(clip.y) && y0 < Double(clip.y + clip.height)
     }
 
+    /// Where pixel (x, y) of the image starts in `pixels`.
+    @inline(__always) func index(_ x: Int, _ y: Int) -> Int { ((y - bounds.y) * width + (x - bounds.x)) * 4 }
+
     /// Source-over of a colour with per-pixel coverage, in sRGB-encoded values
     /// (as CoreGraphics and browsers blend).
     @inline(__always) mutating func blend(_ i: Int, _ c: Color, _ coverage: Float) {
@@ -80,7 +95,7 @@ public struct Canvas {
             let cy = min(Double(y + 1), y1) - max(Double(y), y0)
             for x in ix0..<ix1 {
                 let cx = min(Double(x + 1), x1) - max(Double(x), x0)
-                blend((y * width + x) * 4, color, Float(cx * cy))
+                blend(index(x, y), color, Float(cx * cy))
             }
         }
     }
@@ -101,7 +116,7 @@ public struct Canvas {
             let row = (y - m.top) * m.width - m.left
             for x in x0..<x1 {
                 let c = m.coverage[row + x]
-                if c > 0 { blend((y * width + x) * 4, color, c) }
+                if c > 0 { blend(index(x, y), color, c) }
             }
         }
     }
@@ -136,10 +151,13 @@ public struct Canvas {
     /// Draws the items of `list` that touch `region` (pixels; nil for the
     /// whole canvas), changing no pixel outside it. Pixels inside come out
     /// exactly as if the whole list were drawn.
-    public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) {
-        let region = region ?? PixelRect(x: 0, y: 0, width: width, height: height)
+    public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) { draw(list, in: region, upTo: list.items.count) }
+
+    /// Draws the first `end` items of `list` that touch `region`.
+    mutating func draw(_ list: DisplayList, in region: PixelRect?, upTo end: Int) {
+        let region = region ?? bounds
         let savedClip = clip, savedOrigin = origin
-        for item in list.items where item.bounds.intersects(region) {
+        for (k, item) in list.items[0..<end].enumerated() where item.bounds.intersects(region) {
             clip = item.clip.clamped(to: region)
             origin = item.origin
             switch item.operation {
@@ -147,6 +165,7 @@ public struct Canvas {
             case .path(let p, let c): fill(p, c)
             case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
             case .image(let img, let r): draw(img, in: r)
+            case .backdrop(let shape, let effect): drawBackdrop(list, k, shape, effect, region: region)
             }
         }
         clip = savedClip; origin = savedOrigin
@@ -167,7 +186,7 @@ public struct Canvas {
                 let s = ((y - r.y) * b.width + (x - r.x)) * 4
                 let a = Float(b.pixels[s + 3]) / 255
                 guard a > 0 else { continue }
-                let i = (y * width + x) * 4, k = 1 - a
+                let i = index(x, y), k = 1 - a
                 pixels[i] = Float(b.pixels[s]) / 255 * a + pixels[i] * k
                 pixels[i + 1] = Float(b.pixels[s + 1]) / 255 * a + pixels[i + 1] * k
                 pixels[i + 2] = Float(b.pixels[s + 2]) / 255 * a + pixels[i + 2] * k
@@ -178,13 +197,13 @@ public struct Canvas {
 
     /// Sets every pixel of `region` to `color`, as a new canvas with that background.
     public mutating func clear(_ region: PixelRect, to color: Color) {
-        let r = region.clamped(to: PixelRect(x: 0, y: 0, width: width, height: height))
+        let r = region.clamped(to: bounds)
         guard !r.isEmpty else { return }
         let a = Float(color.opacity)
         let px: (Float, Float, Float, Float) = a > 0 ? (Float(color.red) * a, Float(color.green) * a, Float(color.blue) * a, a) : (0, 0, 0, 0)
         for y in r.y..<(r.y + r.height) {
             for x in r.x..<(r.x + r.width) {
-                let i = (y * width + x) * 4
+                let i = index(x, y)
                 pixels[i] = px.0; pixels[i + 1] = px.1; pixels[i + 2] = px.2; pixels[i + 3] = px.3
             }
         }

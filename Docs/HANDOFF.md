@@ -20,7 +20,7 @@ Current state of the work. Every session updates this before it ends.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
 - Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (30 checks: base, text, render, ui).
+  passes (33 checks: base, text, render, ui, effects).
 
 ### Done
 
@@ -72,7 +72,9 @@ Current state of the work. Every session updates this before it ends.
     `Identifiable`, or an index range), `.id(_:)`.
   - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`, cut
     to the height it is offered with an ellipsis on the last line that fits),
-    `Color`, `Rectangle`, `Spacer`, `Divider`, `HStack`, `VStack`,
+    `Color`, shapes (`Rectangle`, `RoundedRectangle`, `Capsule`, `Circle`,
+    custom `Shape`s; `.fill`, `.stroke`, `.strokeBorder`; session 4),
+    `Spacer`, `Divider`, `HStack`, `VStack`,
     `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both),
     `Image` (session 4: a `Bitmap` at its own size or `resizable()`; drawn
     through `RasterImage`, which keeps scaled copies so an unchanged image
@@ -103,6 +105,7 @@ Current state of the work. Every session updates this before it ends.
     focus, and show "disabled" in the element tree. Button styles can use
     `@Environment` and `@State` (`LinksNestedProperties`).
   - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
+    `glassEffect`, `background(_ material:in:)`,
     `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -217,6 +220,53 @@ Read this before changing drawing in `PolymerUI` or `PolymerRender`.
   whole), `ui.damage` (an Add click redraws about 4% of the counter image;
   every frame while scrolling the plain and lazy lists equals a whole
   draw; every drawn pixel lies in some item's bounds).
+
+### Effects and materials (session 4)
+
+DESIGN section 11 is the design; this is how the CPU reference does it.
+
+- **Shapes** (`Shapes.swift`): `Shape` with `path(in:)`; `InsettableShape`;
+  the built-ins conform to `RoundedRectShape` and give a PolymerBase
+  `RoundedRect` (rect, corner radius), which has the path (cubic corners)
+  and an exact signed distance and edge normal. Built-ins resolve straight
+  to a `ShapeNode` (no host). A plain rectangle fills exactly as `Color`.
+  Strokes are rings (outer path plus the inset path reversed, non-zero
+  winding), so a 1-point border on a pixel-aligned frame is crisp. Custom
+  shapes can be filled, not stroked yet (a warning says so).
+- **Backdrop items.** `DisplayList.drawBackdrop(shape, effect)` records a
+  `.backdrop` item with `reach` (pixels around a point it reads: 3 sigma of
+  blur, plus refraction and 2). `Canvas` can now cover part of an image
+  (`Canvas(bounds:)`, pixel origin). On replay the effect copies the pixels
+  behind it from the canvas when the region being drawn covers its reach;
+  otherwise it draws the items before it again offscreen over just that
+  area, so partial and whole draws give identical pixels.
+- **Damage.** `DisplayList.spreadThroughEffects`: a damaged rectangle within
+  an effect's reach damages the effect's pixels within reach of it,
+  repeated (effects over effects).
+- **Maths** (`Effects.swift`): separable Gaussian (sigma = radius in
+  pixels, 3 sigma, edges repeated) in premultiplied sRGB-encoded values;
+  coverage from the distance field (0.5 - d); glass pulls content from
+  outside by `refraction * (1 - u)^2` along the normal, u the depth over
+  the bezel; bilinear sampling; tint over; rim light from the normal's
+  angle to the light, squared, over `rimWidth`; dispersion bends red and
+  blue apart. Only basic arithmetic and our `Math`, so pixels are the same
+  on every OS.
+- **API** (`PolymerUI/Effects.swift`): `Glass` (`.regular`, `.clear`,
+  `.identity`, `.tint`), `.glassEffect(_:in:)` (capsule by default),
+  `Material` (`.ultraThinMaterial` ... `.ultraThickMaterial`, dark tints),
+  `.background(_:in:)`; both are a background layer (`BackdropNode`, shown
+  as "Glass" or "Material" in the element tree).
+  `EnvironmentValues.accessibilityReduceTransparency` draws opaque fills.
+  The default values are placeholders for PolymerDesign tokens (DESIGN 11.8).
+- Checks: `effects.shapes` (exact areas, crisp borders, distance field),
+  `effects.blur` (flat stays flat, light kept, outside untouched),
+  `effects.glass` (rim refraction, untouched middle, rim light, glass over
+  a scrolling list redraws partially with identical pixels, reduced
+  transparency). `out/checks/effects/glass-showcase@2x.png` shows the look.
+- Next: GPU versions, `GlassEffectContainer` (smooth union of distance
+  fields), `interactive()`, `.blur(radius:)` on a view's own content (needs
+  layers), shadows if the design system wants them, speed (the CPU blur is
+  direct; a box-filter approximation or downsampling for large radii).
 
 ### Skipping unchanged views (session 4)
 
@@ -417,7 +467,9 @@ side) to confirm the luminance rule between the two measured colours.
 5. `PolymerUI`: ~~views, result builders, observation-based state,
    identity, layout, text wrapping, buttons and clicks~~ done; next:
    ~~lazy stacks~~, ~~lazy grids~~, ~~images~~ and ~~keyboard and focus~~
-   (done), `Grid` (not lazy), scroll bars
+   (done), effects (blur, materials, liquid glass on the CPU: session 4;
+   GPU, merging glass, interactive glass and `.blur` on layers to come,
+   DESIGN 11.6), `Grid` (not lazy), scroll bars
    and scroll physics, element names (stable paths for
    Customize and for driving input), a focus ring, animation, ~~skipping bodies of unchanged `Equatable`
    views~~, ~~text cut to the height it is given~~ (both done, session 4).
@@ -444,7 +496,7 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (30 checks) as of Windows session 4.
+  in debug. Both pass (33 checks) as of Windows session 4.
 
 ## Mac side (for a later Mac session)
 
@@ -499,6 +551,11 @@ side) to confirm the luminance rule between the two measured colours.
   across their axis. Laziness is decided while resolving (a context flag)
   rather than by deferring every `ForEach`, so plain stacks behave exactly
   as before.
+- 2026-11-14 (Windows 4): effects are ours on every OS (owner's request,
+  DESIGN 11 and D12): every effect shape is a rounded rectangle so one
+  exact distance field serves coverage, normals and depth; the CPU is the
+  reference the GPU will be compared with. SwiftUI's default glass shape
+  (capsule) is kept until the design system says otherwise.
 - 2026-11-14 (Windows 4): layout passes exact rectangles to children and
   rounds only each node's own frame (it used to lay children out in the
   rounded frame, so a 157.33-point column gave its art 157 or 157.5 points
