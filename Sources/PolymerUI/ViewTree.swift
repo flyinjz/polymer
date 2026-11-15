@@ -298,6 +298,40 @@ public final class ViewTree {
         if b.pressed.peek != down { b.pressed.value = down }
     }
 
+    // MARK: Accessibility
+
+    /// The accessibility tree: what a screen reader sees, built now from the
+    /// view tree. The root is a group the size of the tree.
+    public var accessibilityTree: AccessibilityElement {
+        update()
+        let inner = root?.accessibilityElements(AccessibilityEdits(), focused: state.focused) ?? []
+        return AccessibilityElement(role: .group, label: "", value: nil, hint: nil, traits: [], frame: Rect(origin: .zero, size: size),
+                                    isEnabled: true, isFocused: false, children: inner, nodeID: nil)
+    }
+
+    /// The accessibility tree as text, one element per line (the root's children at the top level).
+    public var accessibilityDescription: String {
+        var out = ""
+        for e in accessibilityTree.children { e.dump(into: &out) }
+        return out
+    }
+
+    /// Does what a screen reader's "press" does on the first button whose
+    /// label is `label`: runs its action if it is enabled. Returns false when
+    /// there is no such button or it is disabled.
+    @discardableResult
+    public func accessibilityPress(label: String) -> Bool {
+        func find(_ e: AccessibilityElement) -> AccessibilityElement? {
+            if e.role == .button, e.label == label { return e }
+            for c in e.children { if let f = find(c) { return f } }
+            return nil
+        }
+        guard let e = find(accessibilityTree), e.isEnabled, let id = e.nodeID,
+              let node = root?.first(where: { ObjectIdentifier($0) == id }), let action = node.tapAction else { return false }
+        action()
+        return true
+    }
+
     // MARK: Keyboard
 
     /// Sends a key press to the focused view, then to each view around it,

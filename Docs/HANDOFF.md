@@ -118,6 +118,20 @@ Current state of the work. Every session updates this before it ends.
     `ViewTree.drag(from:to:steps:)` for headless use (a `--drag` option for
     the `polymer` command is for whoever next edits PolymerTools). Check:
     `ui.drag`.
+  - Accessibility tree (Agent B, session 5; `Accessibility.swift`, DESIGN
+    D11): `ViewTree.accessibilityTree` (an `AccessibilityElement`: role,
+    label, value, hint, traits, screen frame, enabled, focused, children),
+    `accessibilityDescription` (as text) and `accessibilityPress(label:)`.
+    Built on request by walking the nodes (`Node.accessibilityElements`), so
+    it costs nothing until asked; leaving views and lazy rows out of view
+    are not in it. Roles from `ownAccessibility`: `TextNode` text, button
+    `TapNode` (children combined into its label with ", "), `ImageNode`,
+    `ScrollNode` (contains), `FocusableNode` (combines). Modifiers are
+    `AccessibilityNode` pass-throughs collected on the way down (the one
+    nearest the view wins); on a node that is not an element they apply to
+    the elements inside. Check: `ui.accessibility`. Next: hand it to UI
+    Automation / NSAccessibility (window backends), text fields as
+    editable text, a `--a11y` option for `polymer tree` (PolymerTools).
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
