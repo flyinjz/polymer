@@ -1,6 +1,8 @@
 # Polymer: design
 
 Status: signed off 2026-11-13. Changes to section 1 or 2 need the owner's OK.
+Section 11 (effects and materials, liquid glass) and D12 added 2026-11-14 at
+the owner's request; its open points are listed in 11.8.
 
 ## 0. What it is
 
@@ -102,6 +104,7 @@ look as clean as on a Mac, on every screen (section 4).
 | D9 | Linux | Later; the platform interfaces stay ready for it. |
 | D10 | The Windows Qt app | Frozen now, replaced by Polymer. |
 | D11 | Accessibility and IME | In the architecture from day one (accessibility tree, text input protocol); full screen-reader and IME support finished later. |
+| D12 | Effects and materials | **Ours**, rendered by Polymer's own compositor on every OS: backdrop blur, materials and liquid glass (refraction, frost, rim light) as first-class effects (section 11). The OS supplies only what lies behind the window (DWM / NSVisualEffectView). |
 
 ## 3. Modules
 
@@ -113,6 +116,7 @@ PolymerPlatform    interfaces: window, events, clipboard, cursor, dialogs, glass
 PolymerGPU         device, buffers, textures, pipelines, command encoding
   …Metal / …D3D12                                                          (per OS)
 PolymerRender      display lists, layers, compositor, damage regions, images,
+                   effects (blur, materials, liquid glass; section 11),
                    blur, clipping, offscreen rendering for tests
 PolymerText        font parsing, rasteriser, shaping, line breaking, glyph cache,
                    layout, editing (caret, selection, undo, IME composition)
@@ -236,3 +240,117 @@ running end to end as it grows.
   to stable language features.
 - Mac sessions can only run Mac code; Windows needs a session on the
   owner's Windows PC.
+
+## 11. Effects and materials
+
+Added 2026-11-14 at the owner's request: support for advanced effects such
+as liquid glass, built into the framework rather than left to each app.
+
+### 11.1 What there is
+
+- **Backdrop blur.** A shape blurs whatever was drawn behind it (Gaussian,
+  radius in points). The base of the pgr dark glass.
+- **Materials.** Blur plus a tint, in a few strengths (SwiftUI's
+  `Material`: ultra-thin to ultra-thick). Their colours and strengths are
+  design tokens, so the dark glass stays clear and never murky, however
+  many layers stack.
+- **Liquid glass.** A shape that behaves like a thick piece of glass over
+  the content behind it:
+  - *Refraction*: near its edge the glass bends light, so the content
+    under the rim is pulled in from just outside the shape, as through the
+    curved edge of a lens; the flat middle shows the content undistorted.
+  - *Frost*: a light blur of what is seen through it.
+  - *Rim light*: a thin highlight along edges facing a light direction,
+    from the shape's geometry, plus a fainter one opposite.
+  - *Tint*: a colour laid over what is seen through it (the accent, or a
+    grey).
+  - Optional *dispersion*: red and blue bent slightly differently at the
+    rim. Off by default.
+  - Later: shapes that merge when close (a smooth union of their distance
+    fields, SwiftUI's `GlassEffectContainer`), and glass that responds to
+    the pointer (`interactive()`, with animation).
+- **The window's own backdrop** (the desktop behind the window) comes from
+  the OS: DWM acrylic or mica on Windows, `NSVisualEffectView` on the Mac.
+  An app can't read other apps' pixels, so this is the one effect the OS
+  draws; everything inside the window is Polymer's.
+
+### 11.2 How it is drawn
+
+- Effects are items in the display list, like rectangles and text. A
+  backdrop effect reads the pixels drawn before it within its shape plus
+  its reach (blur radius, refraction distance), filters them and draws the
+  result inside its shape.
+- Every effect shape is a rounded rectangle (rectangles, capsules and
+  circles are special cases), so one exact signed distance field gives
+  coverage, the edge normal and the distance from the edge for every pixel.
+  Anti-aliasing comes from that distance, so edges are as clean as text.
+- The CPU renderer is the reference: plain arithmetic, identical pixels on
+  every OS, used by headless checks. The GPU renderers run the same maths
+  in shaders and are compared with it.
+- **Damage.** An effect depends on the pixels within its reach. When
+  anything there changes, the parts of the effect within reach of the
+  change are drawn again; nothing else is. Redrawing only damage gives the
+  same pixels as drawing everything, as for every other item.
+- **Cost.** Blur is separable (two one-dimensional passes); on the GPU a
+  downsampled pyramid. Effects over unchanged content cost nothing,
+  because nothing under them is damaged. The cost of each effect per frame
+  is measured, and a regression is a bug (1.3).
+
+### 11.3 API
+
+SwiftUI's names, so models already know them:
+
+- `.glassEffect()`, `.glassEffect(.regular.tint(color), in: shape)` with
+  `Glass` (`.regular`, `.clear`, `.identity`, `.tint(_:)`; later
+  `.interactive()`), and `GlassEffectContainer` when merging comes.
+- `.background(.ultraThinMaterial)` and the other `Material`s, in a shape:
+  `.background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))`.
+- `.blur(radius:)` for blurring a view's own content (comes with layers).
+- Shapes: `Rectangle`, `RoundedRectangle(cornerRadius:)`, `Capsule`,
+  `Circle`, with `.fill`, `.stroke` and `.strokeBorder` (1px lines).
+
+### 11.4 Accessibility
+
+- With the OS's "reduce transparency" setting, glass and materials draw as
+  an opaque tinted fill of the same shape. With "increase contrast", rims
+  and borders get stronger.
+- Text on glass must keep the contrast the design system asks for; a check
+  measures it against what is actually behind the glass.
+
+### 11.5 How it fits the pgr look
+
+Section 1.4 rules out gradients and glow. Liquid glass is a material, not
+decoration: its light and shading come from the shape and what is behind
+it, never from painted gradients, and it never glows outward. Effects
+follow the same tokens as everything else (one accent, greys), and the
+design system decides where glass is used; apps don't tune it per view.
+
+### 11.6 Order of work
+
+1. Shapes with exact coverage, fills and 1px strokes.
+2. Backdrop blur and materials in the CPU renderer, with damage.
+3. Liquid glass: refraction, frost, rim light, tint; dispersion behind an
+   option.
+4. The same effects on the GPU (D3D12, then Metal), compared with the CPU
+   reference.
+5. Merging glass shapes, interactive glass, `.blur(radius:)` on layers.
+
+### 11.7 Checks
+
+- Blur keeps a flat colour flat and keeps the total light; materials and
+  glass over flat content give exactly the tint over that content.
+- Refraction moves content near the rim and leaves the middle untouched.
+- Redrawing only the damage gives the same pixels as drawing everything,
+  with effects over moving content (scrolling under glass).
+- Reference images of glass over test patterns, compared exactly on the
+  CPU and within a stated tolerance on the GPU.
+
+### 11.8 For the owner's review
+
+- The look of the defaults (refraction strength, frost, rim brightness,
+  tint), and whether dispersion is ever on, are design decisions; they
+  start as PolymerDesign tokens with conservative values.
+- SwiftUI's default glass shape is a capsule; the pgr grid may want square
+  or slightly rounded corners by default.
+- Whether the rim light is allowed under "no glow" (it is a reflection on
+  the glass edge, not light spilling outward).
