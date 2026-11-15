@@ -156,8 +156,10 @@ final class StackNode: Node {
     }
 
     /// Draws only the children that can be seen (inside a scroll view most are not).
-    override func draw(_ list: inout DisplayList) {
-        for c in flat where list.isVisible(c.frame) { c.draw(&list) }
+    override func drawContent(_ list: inout DisplayList) {
+        // While removed views are still leaving, they are drawn in their old places among the rest.
+        let items = tree?.ghostOwners.isEmpty == false ? (children.first?.drawnFlattened ?? []) : flat
+        for c in items where list.isVisible(c.frame) { c.draw(&list) }
     }
 
     override func placeChildren(in r: Rect) {

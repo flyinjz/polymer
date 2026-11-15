@@ -99,7 +99,9 @@ class Node {
     }
 
     /// True while one of the node's animated values is still moving at `now`.
-    func isAnimating(at now: Double) -> Bool { frameAnimates && animatedFrame.isRunning(at: now) }
+    func isAnimating(at now: Double) -> Bool {
+        (frameAnimates && animatedFrame.isRunning(at: now)) || transition?.phase.isRunning(at: now) == true
+    }
 
     /// The exact rectangle the node was last placed in (`frame` is it rounded to pixels).
     final private(set) var placedRect: Rect?
@@ -146,17 +148,23 @@ class Node {
         let old = index < children.count ? children[index] : nil
         let new = reconcile(view, old, c)
         if new !== old {
-            old?.unmount()
+            if let old { depart(old, at: index) }
             if index < children.count { children[index] = new } else { children.append(new) }
+            new.parent = self
+            arrive(new)
         }
         new.parent = self
     }
 
     final func removeChildren(from index: Int) {
         guard index < children.count else { return }
-        for c in children[index...] { c.unmount() }
+        for (i, c) in children[index...].enumerated() { depart(c, at: index + i) }
         children.removeSubrange(index...)
     }
+
+    /// False until the node's first resolve has finished: changes to the
+    /// children of a node being built are not insertions or removals.
+    final var resolvedOnce = false
 
     /// Called once when the node leaves the tree for good.
     func unmount() {
@@ -170,8 +178,104 @@ class Node {
 
     // MARK: Drawing
 
-    func draw(_ list: inout DisplayList) {
-        for c in children { c.draw(&list) }
+    /// Records the node: its content, through its transition while it is
+    /// being inserted or removed. Nodes draw themselves in `drawContent`.
+    final func draw(_ list: inout DisplayList) {
+        guard let t = transition else { drawContent(&list); return }
+        let now = tree?.now ?? 0
+        if !t.removing, !t.phase.isRunning(at: now) { transition = nil; drawContent(&list); return }
+        let s = t.effect.state(at: t.phase.value(at: now), size: frame.size)
+        let area = frame
+        list.translated(by: s.offset) { l in
+            if s.scale == 1 {
+                l.layer(LayerEffect(opacity: s.opacity), area: area) { drawContent(&$0) }
+            } else {
+                l.scaled(by: s.scale, about: t.effect.anchor.point(in: area)) { l in
+                    l.layer(LayerEffect(opacity: s.opacity), area: area) { drawContent(&$0) }
+                }
+            }
+        }
+    }
+
+    /// Records what the node draws (its children by default, and the
+    /// children still leaving with a transition, in their old places).
+    func drawContent(_ list: inout DisplayList) {
+        if ghosts.isEmpty {
+            for c in children { c.draw(&list) }
+            return
+        }
+        var g = 0
+        for (i, c) in children.enumerated() {
+            while g < ghosts.count, ghosts[g].index <= i { ghosts[g].node.draw(&list); g += 1 }
+            c.draw(&list)
+        }
+        while g < ghosts.count { ghosts[g].node.draw(&list); g += 1 }
+    }
+
+    // MARK: Transitions
+
+    /// The insertion or removal this node is going through, if any.
+    final var transition: ActiveTransition?
+    /// Children removed with an animation, drawn until their removal transition ends (by index, in order).
+    final var ghosts: [Ghost] = []
+
+    /// Like `flattened`, with children still leaving included where they were:
+    /// what stacks draw while any removal transition runs.
+    var drawnFlattened: [Node] { [self] }
+
+    /// `drawnFlattened` for groups and views with a body: `own` children and the ghosts among them.
+    final func drawnFlattened(_ own: ArraySlice<Node>) -> [Node] {
+        var out: [Node] = []
+        var g = 0
+        for (i, c) in own.enumerated() {
+            while g < ghosts.count, ghosts[g].index <= i { out += ghosts[g].node.drawnFlattened; g += 1 }
+            out += c.drawnFlattened
+        }
+        while g < ghosts.count { out += ghosts[g].node.drawnFlattened; g += 1 }
+        return out
+    }
+
+    /// A child came into the tree: under an animation, what it shows enters with its transition.
+    final func arrive(_ new: Node) {
+        guard resolvedOnce, let animation = currentAnimation, animation.duration > 0, let tree else { return }
+        for leaf in new.flattened {
+            let effect = AnyTransition.find(from: leaf, to: new).insertion
+            var phase = Animated(0.0)
+            if phase.set(1, animation: animation, now: tree.now) {
+                leaf.transition = ActiveTransition(effect: effect, phase: phase, removing: false)
+                tree.startedAnimation(leaf)
+            }
+        }
+    }
+
+    /// A child left the tree. Under an animation, and where this node can draw
+    /// it (groups and views with a body), it stays drawn in place, leaving with
+    /// its transition; otherwise it is gone at once.
+    final func depart(_ old: Node, at index: Int) {
+        old.unmount()
+        guard resolvedOnce, self is ContainerNode || self is PassthroughNode, !(self is LazyForEachNode),
+              let animation = currentAnimation, animation.duration > 0, let tree else { return }
+        let leaves = old.flattened
+        var any = false
+        for leaf in leaves where leaf.placedRect != nil {
+            let effect = AnyTransition.find(from: leaf, to: old).removal
+            var phase = leaf.transition?.phase ?? Animated(1.0)
+            if phase.set(0, animation: animation, now: tree.now) {
+                leaf.transition = ActiveTransition(effect: effect, phase: phase, removing: true)
+                tree.startedAnimation(leaf)
+                any = true
+            }
+        }
+        guard any else { return }
+        let at = ghosts.firstIndex { $0.index > index } ?? ghosts.count
+        ghosts.insert(Ghost(node: old, index: index, leaves: leaves), at: at)
+        tree.addGhostOwner(self)
+    }
+
+    /// Forgets children whose removal transition has ended. Returns true while some are still leaving.
+    final func pruneGhosts(at now: Double) -> Bool {
+        ghosts.removeAll { g in !g.leaves.contains { $0.transition?.phase.isRunning(at: now) == true } }
+        return !ghosts.isEmpty && isMounted
     }
 
     // MARK: Element tree
@@ -207,10 +311,17 @@ class Node {
             let d = detail
             if !d.isEmpty { out += " \(d)" }
             if mark { out += " focused"; mark = false }
+            if isLeaving { out += " leaving" }
             out += "\n"
             depth += 1
         }
-        for c in children { c.dump(into: &out, depth: depth, focused: focused, markFocus: mark); mark = false }
+        // Children still leaving are listed where they are drawn.
+        var g = 0
+        for (i, c) in children.enumerated() {
+            while g < ghosts.count, ghosts[g].index <= i { ghosts[g].node.dump(into: &out, depth: depth); g += 1 }
+            c.dump(into: &out, depth: depth, focused: focused, markFocus: mark); mark = false
+        }
+        while g < ghosts.count { ghosts[g].node.dump(into: &out, depth: depth); g += 1 }
     }
 
     // MARK: Input
@@ -249,6 +360,7 @@ class Node {
 class ContainerNode: Node {
     override var isElement: Bool { false }
     override var flattened: [Node] { children.flatMap { $0.flattened } }
+    override var drawnFlattened: [Node] { drawnFlattened(children[...]) }
     override var lazySegments: [LazySegment] { children.flatMap { $0.lazySegments } }
     override func childrenAreLazy(_ inherited: Bool) -> Bool { inherited }
 
@@ -274,6 +386,7 @@ final class GroupNode: ContainerNode {}
 class PassthroughNode: Node {
     override var isElement: Bool { false }
     override var flattened: [Node] { children.first?.flattened ?? [] }
+    override var drawnFlattened: [Node] { drawnFlattened(children.prefix(1)) }
     override var lazySegments: [LazySegment] { children.first?.lazySegments ?? [] }
     override func childrenAreLazy(_ inherited: Bool) -> Bool { inherited }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children.first?.measure(p) ?? .zero }

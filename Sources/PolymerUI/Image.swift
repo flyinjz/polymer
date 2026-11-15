@@ -62,7 +62,7 @@ final class ImageNode: Node {
         return Size(width: w, height: h)
     }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         guard let image, list.isVisible(frame) else { return }
         list.draw(image, in: frame)
     }

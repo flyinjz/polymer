@@ -225,6 +225,21 @@ final class TreeState {
     }
     /// Views with `.onHover`.
     var hoverNodes: [WeakHoverNode] = []
+    /// Nodes drawing removed children that are still leaving (`Node.ghosts`).
+    var ghostOwners: [WeakNode] = []
+    func addGhostOwner(_ n: Node) {
+        if !ghostOwners.contains(where: { $0.node === n }) { ghostOwners.append(WeakNode(node: n)) }
+    }
+    /// Forgets removed children whose transition has ended.
+    func pruneGhosts() {
+        guard !ghostOwners.isEmpty else { return }
+        ghostOwners.removeAll { w in
+            guard let n = w.node else { return true }
+            if n.pruneGhosts(at: now) { return false }
+            n.ghosts.removeAll()
+            return true
+        }
+    }
 }
 
 // MARK: Hosts

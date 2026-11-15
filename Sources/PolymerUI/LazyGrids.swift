@@ -345,12 +345,13 @@ final class LazyGridNode: Node, LazyViewport {
         }
     }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         for seg in segments {
             switch seg {
             case .node(let v): if list.isVisible(v.frame) { v.draw(&list) }
             case .elements(let f):
-                for e in f.children { for x in e.flattened where list.isVisible(x.frame) { x.draw(&list) } }
+                let ghosts = tree?.ghostOwners.isEmpty == false
+                for e in f.children { for x in (ghosts ? e.drawnFlattened : e.flattened) where list.isVisible(x.frame) { x.draw(&list) } }
             }
         }
     }

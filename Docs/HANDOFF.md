@@ -107,7 +107,8 @@ Current state of the work. Every session updates this before it ends.
     `glassEffect`, `background(_ material:in:)`, `opacity`, `clipShape`,
     `blur(radius:)` (layers, session 4), `offset(x:y:)`,
     `GlassEffectContainer` (session 4), `animation(_:value:)` and
-    `withAnimation` (session 4; see "Animation"),
+    `withAnimation` (session 4; see "Animation"), `.transition(_:)` and
+    `.scaleEffect(_:anchor:)` (Agent B, session 5),
     `scaledToFit`, `scaledToFill`, `background`,
     `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
     `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
@@ -122,7 +123,7 @@ Current state of the work. Every session updates this before it ends.
     window uses to schedule a frame; `bodyEvaluations` counts work for
     checks.
   - `ImageRenderer` (SwiftUI's name) for one-shot images and trees.
-  - Not yet: scroll bars, transitions (insert and remove), element names, pressed looks for
+  - Not yet: scroll bars, element names, pressed looks for
     tap gestures, a focus ring (a PolymerDesign look), scrolling the focused view
     into view.
 - `polymer` command: `check [filter] [--list] [--verbose]`,
@@ -314,19 +315,64 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   `reconcile` stamps nodes with it and the pass number (before resolving an
   existing node, so its own changes can animate).
 - **What animates.** `Animated<T: Interpolatable>` keeps target, start
-  value, start time and animation; a change with an animation starts from
-  the value shown now (so interruptions are smooth in position, not in
-  speed). `Node.frame` is now the shown frame; `layoutFrame` is where
-  layout put it. Animated: frames (`Node.place`), `.opacity`
-  (`LayerEffectNode`), `Color` fills (`FillNode`). New nodes never animate.
-  Text keeps its final line breaks and moves with its frame's centre.
-  Hit testing and the element tree use the shown frames.
-- Check: `ui.animation` (curves, a frame half way, interruption, no
+  value, start time, animation and (for springs) a starting velocity.
+  `Interpolatable` is a small vector space (`adding`, `scaled(by:)`,
+  `magnitudeSquared`, `shown`), like SwiftUI's `VectorArithmetic`; colours
+  move as an unclamped `ColorVector` and are clamped when shown. A change
+  with an animation starts from the value shown now; a spring also starts
+  with the speed the value had (`speed(at:)`, closed-form derivatives), so
+  an interruption bends the motion instead of stopping it, and its settle
+  time is worked out from displacement and velocity (`settleTime`). A
+  timing curve starts again at rest (SwiftUI adds curves instead; see
+  DIFFERENCES). `Node.frame` is the shown frame; `layoutFrame` is where
+  layout put it. Animated (session 4 and Agent B, session 5): frames
+  (`Node.place`, which also covers `.offset`), `.opacity`, `Color` fills,
+  shape fill and stroke colours, text colour, `.scaleEffect`. New nodes
+  never animate. Text keeps its final line breaks and moves with its
+  frame's centre. Hit testing and the element tree use the shown frames.
+- **Drawing.** `Node.draw` is final: it applies a running transition, then
+  calls `drawContent`, which nodes override (renamed from `draw`).
+- **Transitions** (`Transition.swift`): `AnyTransition` (`.identity`,
+  `.opacity`, `.move(edge:)`, `.offset(x:y:)`, `.scale`,
+  `.scale(scale:anchor:)`, `.slide`, `.push(from:)`, `.asymmetric`,
+  `.combined(with:)`) is an `Effect` for each direction (opacity, offset in
+  points and in the view's own size, scale about a `UnitPoint`).
+  `Node.setChild`, `removeChildren` and `ForEachNode.update` call
+  `arrive`/`depart`. Only when the parent already existed (`resolvedOnce`,
+  set when its first resolve ends) and an animation is current: an arriving
+  node's leaves (`flattened`, so a stack's own items) get an
+  `ActiveTransition` whose phase goes 0 to 1; a departing node is unmounted
+  at once (state, focus and hover gone, no clicks) but kept in the parent's
+  `ghosts` with its old index, its leaves' phase going to 0. Ghosts are
+  drawn among the children at that index (`drawContent`, and
+  `drawnFlattened` for stacks and lazy stacks, used only while
+  `TreeState.ghostOwners` is not empty), take no space, are listed in the
+  element tree marked "leaving", and are dropped by `pruneGhosts` at the
+  start of `update()` once their phase ends. Groups and views with a body
+  can keep ghosts; anything else removes at once. The transition is the
+  nearest `.transition` between a leaf and the inserted node, else
+  `.opacity` (SwiftUI's default). Re-inserting a leaving view makes a new
+  one, as in SwiftUI. Lazy stack rows built on scrolling never transition.
+- **Scale.** `.scaleEffect(_:anchor:)` and the scale transitions record
+  through `DisplayList.scaled(by:about:)` (Agent A, session 5): exact at
+  record time, text from outlines. Layout and the element tree keep the
+  unscaled frame; hit testing maps the point back.
+- Checks: `ui.animation` (curves, a frame half way, interruption, no
   animation without a transaction, opacity and colour, `.animation(value:)`,
-  spring overshoot, partial frames equal whole draws while animating).
-- Next: transitions (insertion and removal), animating `Shape` fills, text
-  colour, offsets and scroll positions; velocity carried across
-  interruptions; `interactive()` glass on top of this.
+  spring overshoot, partial frames equal whole draws while animating),
+  `ui.animation-velocity` (a spring keeps its speed through an
+  interruption and settles; a curve restarts at rest), `ui.transition`
+  (fade on removal while the rest moves up, no clicks on leaving views,
+  `.move`, ForEach removal and insertion with `.offset` drawn in order,
+  re-insertion while leaving, no animation no transition, shape and text
+  colours, `.scale` both ways, `.scaleEffect`, partial frames equal whole
+  draws).
+- Next: animated scroll positions (`ScrollViewReader.scrollTo` in
+  `withAnimation`), `interactive()` glass on top of this; `Animatable`,
+  `.delay`, `.speed`, `.repeatForever` when screens need them. Known
+  limits: a button inside `.scaleEffect` counts its unscaled area for
+  release; a leaving view moved in from outside a scroll view's clip is
+  culled by its layout frame.
 
 ### Skipping unchanged views (session 4)
 
@@ -532,7 +578,7 @@ side) to confirm the luminance rule between the two measured colours.
    DESIGN 11.6), `Grid` (not lazy), scroll bars
    and scroll physics, element names (stable paths for
    Customize and for driving input), a focus ring, ~~animation~~ (frames,
-   opacity, colours; session 4; transitions next), ~~skipping bodies of unchanged `Equatable`
+   opacity, colours; session 4; transitions and spring velocity, session 5), ~~skipping bodies of unchanged `Equatable`
    views~~, ~~text cut to the height it is given~~ (both done, session 4).
 6. `PolymerDesign`: tokens, components, Customize and right-click menus.
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh

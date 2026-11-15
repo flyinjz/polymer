@@ -72,6 +72,7 @@ public final class ViewTree {
     /// Returns true when anything was evaluated.
     @discardableResult
     public func update() -> Bool {
+        state.pruneGhosts()
         var changed = updateOnce()
         // Views may have set a @FocusState, or the focused view may have left; settle focus, then evaluate what that changed.
         for _ in 0..<4 {

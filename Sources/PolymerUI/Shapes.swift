@@ -140,7 +140,15 @@ final class ShapeNode: Node {
     enum Style { case fill(Color); case stroke(Color, Double, centered: Bool) }
     var name = "Shape"
     var geometry: Geometry = .path { _ in Path() }
-    var style: Style = .fill(.clear)
+    var style: Style = .fill(.clear) {
+        didSet {
+            let c: Color = switch style { case .fill(let c), .stroke(let c, _, _): c }
+            change(&animatedColor, to: ColorVector(c))
+        }
+    }
+    /// The fill or stroke colour, moving when it changes under an animation.
+    private var animatedColor = Animated(ColorVector(Color.clear))
+    override func isAnimating(at now: Double) -> Bool { super.isAnimating(at: now) || animatedColor.isRunning(at: now) }
     private var warned = false
 
     override var role: String { name }
@@ -164,25 +172,26 @@ final class ShapeNode: Node {
         return nil
     }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         guard list.isVisible(frame) else { return }
+        let color = animatedColor.value(at: tree?.now ?? 0).color
         switch (geometry, style) {
-        case (.rounded(let g), .fill(let color)):
+        case (.rounded(let g), .fill):
             let r = g(frame)
             // A plain rectangle fills exactly as a colour does.
             if r.cornerRadius == 0 { list.fill(r.rect, color) } else { list.fill(r.path(), color) }
-        case (.rounded(let g), .stroke(let color, let w, let centered)):
+        case (.rounded(let g), .stroke(_, let w, let centered)):
             let outer = g(frame).inset(by: centered ? -w / 2 : 0)
             var ring = outer.path()
             ring.elements += outer.inset(by: w).path(reversed: true).elements
             list.fill(ring, color)
-        case (.path(let g), .fill(let color)):
+        case (.path(let g), .fill):
             list.fill(g(frame), color)
         case (.path, .stroke):
             // Only shapes made of rounded rectangles can be outlined so far; logged once per node.
             if !warned {
                 warned = true
-                Logger("PolymerUI").warning("(name): stroke and strokeBorder work only on Rectangle, RoundedRectangle, Capsule and Circle so far; fill a custom shape instead, or build it from those.")
+                Logger("PolymerUI").warning("\(name): stroke and strokeBorder work only on Rectangle, RoundedRectangle, Capsule and Circle so far; fill a custom shape instead, or build it from those.")
             }
         }
     }

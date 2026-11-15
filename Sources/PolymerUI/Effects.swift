@@ -102,7 +102,7 @@ final class BackdropNode: Node {
     override var detail: String { opaque ? "\(label), opaque" : label }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { p.replacingUnspecified(Size(width: 10, height: 10)) }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         guard let effect, list.isVisible(frame) else { return }
         if !opaque, container?.node != nil { return }   // drawn by the container
         let shape = geometry(frame)
@@ -171,7 +171,7 @@ final class LayerEffectNode: Node {
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r) }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         let effect = LayerEffect(opacity: animatedOpacity.value(at: tree?.now ?? 0), mask: mask?(frame), blur: blur)
         list.layer(effect, area: frame) { children[0].draw(&$0) }
     }
@@ -229,7 +229,7 @@ final class GlassContainerNode: Node {
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r) }
 
-    override func draw(_ list: inout DisplayList) {
+    override func drawContent(_ list: inout DisplayList) {
         // The glass of the views inside, where they draw (moved by any scroll view in between).
         var shapes: [RoundedRect] = []
         var style: GlassStyle?

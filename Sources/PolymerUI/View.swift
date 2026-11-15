@@ -50,6 +50,7 @@ func reconcile<V: View>(_ view: V, _ existing: Node?, _ c: ResolveContext) -> No
     node.resolveAnimation = c.animation
     node.resolvePass = c.tree.pass
     node.invalidateLayout()
+    node.resolvedOnce = true
     return node
 }
 
@@ -203,24 +204,29 @@ final class ForEachNode: ContainerNode {
             for (i, item) in items.enumerated() { setChild(i, item.1, c) }
             return
         }
-        var old: [AnyHashable: Node] = [:]
+        var old: [AnyHashable: (index: Int, node: Node)] = [:]
         old.reserveCapacity(ids.count)
-        for (i, id) in ids.enumerated() { old[id] = children[i] }
+        for (i, id) in ids.enumerated() { old[id] = (i, children[i]) }
         var seen = Set<AnyHashable>()
         var next: [Node] = []
+        var arrived: [Node] = []
         next.reserveCapacity(items.count)
         for (id, view) in items {
             if !seen.insert(id).inserted {
                 Logger("PolymerUI").error("ForEach: the id \(id.base) appears more than once. Ids must be unique; give each element its own id (for example `id: \\.self` only when values never repeat).")
             }
             let prev = old.removeValue(forKey: id)
-            let node = reconcile(view, prev, c)
-            if node !== prev { prev?.unmount() }
+            let node = reconcile(view, prev?.node, c)
+            if node !== prev?.node {
+                if let prev { depart(prev.node, at: prev.index) }
+                arrived.append(node)
+            }
             node.parent = self
             next.append(node)
         }
-        for (_, gone) in old { gone.unmount() }
+        for gone in old.values.sorted(by: { $0.index < $1.index }) { depart(gone.node, at: gone.index) }
         children = next
+        for n in arrived { arrive(n) }
         ids = items.map { $0.0 }
     }
 }
