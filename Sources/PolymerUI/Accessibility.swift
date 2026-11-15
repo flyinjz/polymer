@@ -190,6 +190,7 @@ extension Node {
         case let b as TapNode where b.isButton: return (.button, "", nil, .isButton, .combine, b.isEnabled)
         case is ImageNode: return (.image, "", nil, .isImage, .ignore, true)
         case is ScrollNode: return (.scrollArea, "", nil, [], .contain, true)
+        case let t as TextInputNode: return (.textField, t.title, t.editing.text, [], .ignore, t.isEnabled)
         case is FocusableNode: return (.focusable, "", nil, [], .combine, true)
         default: return nil
         }

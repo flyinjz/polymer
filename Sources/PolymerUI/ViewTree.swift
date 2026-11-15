@@ -19,6 +19,8 @@ public final class ViewTree {
     private weak var pressedNode: Node?
     /// The drag gesture following the pointer while it is down.
     private weak var dragNode: DragGestureNode?
+    /// The text field following the pointer while it is down (selecting by dragging).
+    private weak var textNode: TextInputNode?
     /// The last frame: what it drew, its pixels and background.
     private var lastList: DisplayList?
     private var spareList: DisplayList?
@@ -186,9 +188,9 @@ public final class ViewTree {
     /// goes down and comes up. Returns true when a button or tap handler ran
     /// or focus moved.
     @discardableResult
-    public func click(at point: Point) -> Bool {
+    public func click(at point: Point, count: Int = 1) -> Bool {
         pointerMoved(to: point)
-        let focusMoved = pointerDown(at: point)
+        let focusMoved = pointerDown(at: point, clickCount: count)
         return pointerUp(at: point) || focusMoved
     }
 
@@ -198,6 +200,7 @@ public final class ViewTree {
         update()
         pointer = point
         if let d = dragNode, d.pointerMoved(to: point, time: state.now) { cancelPress() }
+        if let t = textNode { t.pointerDragged(to: point) }
         if let b = pressedNode as? TapNode, b.isButton { setPressed(b, b.isUnderPointer(point)) }
         state.updateHover(point)
     }
@@ -212,7 +215,7 @@ public final class ViewTree {
     /// focus (buttons do not, as on macOS); a button under it shows as
     /// pressed. Returns true when focus moved.
     @discardableResult
-    public func pointerDown(at point: Point) -> Bool {
+    public func pointerDown(at point: Point, clickCount: Int = 1) -> Bool {
         if pointer != point { pointerMoved(to: point) }
         let hit = root?.hitTest(point)
         var focusMoved = false
@@ -243,6 +246,13 @@ public final class ViewTree {
             n = node.parent
         }
         if let d = dragNode, d.pointerDown(at: point, time: state.now) { cancelPress() }
+        // A text field under the press places its caret there and follows a drag to select.
+        textNode = nil
+        n = hit
+        while let node = n {
+            if let t = node as? TextInputNode, t.isEnabled { textNode = t; t.pointerDown(at: point, clickCount: clickCount); cancelPress(); break }
+            n = node.parent
+        }
         return focusMoved
     }
 
@@ -252,6 +262,7 @@ public final class ViewTree {
     public func pointerUp(at point: Point) -> Bool {
         if pointer != point { pointerMoved(to: point) }
         state.pressInteractiveGlass(at: nil)
+        if let t = textNode { textNode = nil; t.pointerUp() }
         if let d = dragNode {
             dragNode = nil
             if d.pointerUp(at: point, time: state.now) { pressedNode = nil; return true }
@@ -296,6 +307,61 @@ public final class ViewTree {
 
     private func setPressed(_ b: TapNode, _ down: Bool) {
         if b.pressed.peek != down { b.pressed.value = down }
+    }
+
+    // MARK: Text input
+
+    /// Where text fields cut, copy and paste. A `MemoryClipboard` unless a
+    /// window installs the system's; headless trees never touch the real one.
+    public var clipboard: any Clipboard {
+        get { state.clipboard ?? MemoryClipboard() }
+        set { state.clipboard = newValue }
+    }
+
+    private var focusedText: TextInputNode? { state.focused as? TextInputNode }
+
+    /// True when the focused view takes text: a window turns its input method on.
+    public var acceptsTextInput: Bool { update(); return focusedText?.isEnabled == true }
+
+    /// Text from the keyboard or an input method, inserted at the caret of the
+    /// focused text field (replacing the selection or marked text). Returns false when no text field has focus.
+    @discardableResult
+    public func insertText(_ text: String) -> Bool {
+        update()
+        guard let t = focusedText, t.isEnabled else { return false }
+        t.insert(text)
+        return true
+    }
+
+    /// Types `text` one character at a time as key presses, as a person would:
+    /// each goes to the focused view (and a run of typing undoes as one step).
+    public func type(_ text: String) {
+        for ch in text { key(KeyPress(key: KeyEquivalent(ch), characters: String(ch))) }
+    }
+
+    /// An input method's text in progress (marked text) for the focused text field;
+    /// `selectedRange` is the caret or selection within it, in characters.
+    @discardableResult
+    public func setMarkedText(_ text: String, selectedRange: Range<Int>) -> Bool {
+        update()
+        guard let t = focusedText, t.isEnabled else { return false }
+        t.setMarked(text, selected: selectedRange)
+        return true
+    }
+
+    /// The input method confirmed its marked text as it stands.
+    public func unmarkText() { focusedText?.unmark() }
+
+    /// The marked text's range in the focused text field, in characters; nil when there is none.
+    public var markedTextRange: Range<Int>? { focusedText?.markedRange }
+    /// The selection (or caret, when empty) in the focused text field, in characters.
+    public var selectedTextRange: Range<Int>? { focusedText?.selectedRange }
+
+    /// Where the first line of `range` of the focused text field is on screen
+    /// (points): an input method shows its candidates there.
+    public func firstRect(forCharacterRange range: Range<Int>) -> Rect? {
+        update()
+        return focusedText?.firstRect(for: range)
     }
 
     // MARK: Accessibility

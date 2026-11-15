@@ -240,6 +240,8 @@ final class TreeState {
         }
     }
     /// Nodes drawing removed children that are still leaving (`Node.ghosts`).
+    /// Where text fields cut, copy and paste (`ViewTree.clipboard`).
+    var clipboard: (any Clipboard)? = MemoryClipboard()
     var ghostOwners: [WeakNode] = []
     func addGhostOwner(_ n: Node) {
         if !ghostOwners.contains(where: { $0.node === n }) { ghostOwners.append(WeakNode(node: n)) }

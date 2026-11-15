@@ -135,6 +135,32 @@ Current state of the work. Every session updates this before it ends.
     the elements inside. Check: `ui.accessibility`. Next: hand it to UI
     Automation / NSAccessibility (window backends), text fields as
     editable text, a `--a11y` option for `polymer tree` (PolymerTools).
+  - `TextField`, `TextEditor` (Agent B, session 5; `TextField.swift`,
+    `TextEditing.swift`): one `TextInputNode` (focusable, takes focus on
+    click) over a `TextEditing` value (characters, anchor and head, marked
+    range, undo and redo stacks; a run of typing or deleting is one undo
+    step). Layout: a paragraph per line break; each paragraph's glyphs come
+    from `TextLayout.line` (clusters kept) and an editor wraps them with
+    `TextInputNode.wrap`, the same rule as `Text` (PolymerText's wrapped
+    lines drop clusters; if it ever exposes break ranges, use those).
+    `EditorLine.carets` gives the x before each character (ligatures split
+    evenly). A field scrolls sideways and an editor down to keep the caret
+    in view. The binding is read through the host's tracking (it is read
+    while resolving, not in the body) and written after each edit. Keys:
+    see DIFFERENCES. Pointer: `ViewTree.pointerDown(at:clickCount:)` gives
+    the press to the text field under it (caret, word, all) and
+    `pointerMoved` extends the selection. Input methods:
+    `ViewTree.setMarkedText` and friends (characters, not UTF-16). The
+    clipboard is `ViewTree.clipboard` (`Clipboard`, `MemoryClipboard`, in
+    PolymerUI until Agent A agrees to move it to PolymerPlatform, and
+    `TextEditing` to PolymerText). The look (1-point caret that doesn't
+    blink, selection in the text colour at 25%, placeholder at 40%) is a
+    placeholder (`TextInputLook`). Check: `ui.text-input` (typing, moving,
+    words, selection, clipboard, undo and redo, deleting, submit, clicks,
+    double and triple clicks, drag selection, scrolling a long line, marked
+    text and its rectangle, the editor's lines, wrapping, a disabled field,
+    accessibility, partial frames equal whole draws);
+    `out/checks/ui/text-input@2x.png` shows the look.
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
@@ -845,6 +871,11 @@ side) to confirm the luminance rule between the two measured colours.
 - Transitions (Agent B, session 5): views inserted or removed under an
   animation fade by default, as in SwiftUI. If the pgr look wants
   something else by default (no transition, or a short move), say so.
+- Text fields (Agent B, session 5): a 1-point caret in the text colour that
+  doesn't blink (blinking needs a timer wake-up twice a second; say if you
+  want it), the selection as the text colour at 25% behind the text, the
+  placeholder at 40%, no border or background. See
+  `out/checks/ui/text-input@2x.png`.
 
 - `Divider` is 1 point thick and uses a separator colour of white at 14%
   opacity until PolymerDesign tokens exist. On 2x screens that is 2
