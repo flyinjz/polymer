@@ -18,9 +18,11 @@ public enum GPUFormat: Sendable {
     case rgba8
     /// Coverage masks (the glyph and path atlas), 0...1.
     case r8
+    /// What a window shows: 8-bit BGRA, opaque. Only `.present` draws into it.
+    case bgra8
 
     public var bytesPerPixel: Int {
-        switch self { case .rgba16Float: 8; case .rgba8: 4; case .r8: 1 }
+        switch self { case .rgba16Float: 8; case .rgba8, .bgra8: 4; case .r8: 1 }
     }
 }
 
@@ -53,6 +55,8 @@ public enum GPUProgram: Int, CaseIterable, Sendable {
     /// A layer drawn over the target. `texture`: the layer; `color.x`: opacity, `color.y`: 1 when masked;
     /// `p2`: the mask's rectangle (x, y, width, height); `p3.x`: its corner radius.
     case composite
+    /// A render target copied into a `.bgra8` display image, over black. No fields.
+    case present
 }
 
 /// One quad and its parameters: six float4s, as the shaders read them.
@@ -170,4 +174,33 @@ public enum GPU {
         }
         return try factory(adapter)
     }
+}
+
+/// Shows render targets in a window (or, for checks, in offscreen images).
+public protocol GPUPresenter: AnyObject {
+    var width: Int { get }
+    var height: Int { get }
+    /// The window's content changed size (pixels).
+    func resize(width: Int, height: Int) throws(GPUError)
+    /// Waits until the display can take another frame, so drawing follows its refresh rate.
+    func waitForFrame()
+    /// Shows `target` (an image the size of the window): only `damage` changed
+    /// since the last frame, so only that is copied and recomposited.
+    func present(_ target: GPUTexture, damage: [PixelRect]) throws(GPUError)
+    /// The last image presented, for offscreen presenters (nil for windows).
+    func readBack() throws(GPUError) -> [UInt8]?
+}
+
+extension GPUBackend {
+    /// A presenter for a window's native handle (an HWND on Windows), or an
+    /// offscreen one with the same buffers and damage tracking when the handle is 0.
+    public func makePresenter(windowHandle: UInt, width: Int, height: Int) throws(GPUError) -> any GPUPresenter {
+        guard let p = self as? GPUPresenting else { throw GPUError("\(name) cannot present to windows yet") }
+        return try p.makePresenter(windowHandle: windowHandle, width: width, height: height)
+    }
+}
+
+/// Backends that can present implement this.
+public protocol GPUPresenting {
+    func makePresenter(windowHandle: UInt, width: Int, height: Int) throws(GPUError) -> any GPUPresenter
 }

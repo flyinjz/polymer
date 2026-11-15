@@ -211,7 +211,7 @@ public final class D3D12Backend: GPUBackend {
         let vs = try Self.compile("vsQuad", "vs_5_0")
         defer { release(vs) }
         let entries: [GPUProgram: String] = [.rect: "psRect", .mask: "psMask", .image: "psImage", .blur: "psBlur",
-                                             .backdrop: "psBackdrop", .composite: "psComposite"]
+                                             .backdrop: "psBackdrop", .composite: "psComposite", .present: "psPresent"]
         for program in GPUProgram.allCases {
             let ps = try Self.compile(entries[program]!, "ps_5_0")
             defer { release(ps) }
@@ -226,7 +226,7 @@ public final class D3D12Backend: GPUBackend {
             blend.BlendOp = D3D12_BLEND_OP_ADD; blend.BlendOpAlpha = D3D12_BLEND_OP_ADD
             blend.LogicOp = D3D12_LOGIC_OP_NOOP
             switch program {
-            case .blur:
+            case .blur, .present:
                 blend.BlendEnable = false
                 blend.SrcBlend = D3D12_BLEND_ONE; blend.DestBlend = D3D12_BLEND_ZERO
                 blend.SrcBlendAlpha = D3D12_BLEND_ONE; blend.DestBlendAlpha = D3D12_BLEND_ZERO
@@ -251,7 +251,7 @@ public final class D3D12Backend: GPUBackend {
             d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS
             d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE
             d.NumRenderTargets = 1
-            d.RTVFormats.0 = DXGI_FORMAT_R16G16B16A16_FLOAT
+            d.RTVFormats.0 = program == .present ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT
             d.SampleDesc = DXGI_SAMPLE_DESC(Count: 1, Quality: 0)
             let device = self.device
             let pso: UnsafeMutablePointer<ID3D12PipelineState> = try comCreate("CreateGraphicsPipelineState (\(program))",
@@ -278,13 +278,14 @@ public final class D3D12Backend: GPUBackend {
             throw GPUError("a \(width)x\(height) texture is outside 1...16384 pixels a side")
         }
         guard let srv = freeSRV.popLast() else { throw GPUError("more than \(Self.srvCount - 1) textures at once; destroy unused ones") }
-        let isTarget = format == .rgba16Float
+        let isTarget = format == .rgba16Float || format == .bgra8
         let rtv = isTarget ? freeRTV.popLast() : nil
         if isTarget && rtv == nil { freeSRV.append(srv); throw GPUError("more than \(Self.rtvCount) render targets at once") }
         let dxgi: DXGI_FORMAT = switch format {
         case .rgba16Float: DXGI_FORMAT_R16G16B16A16_FLOAT
         case .rgba8: DXGI_FORMAT_R8G8B8A8_UNORM
         case .r8: DXGI_FORMAT_R8_UNORM
+        case .bgra8: DXGI_FORMAT_B8G8R8A8_UNORM
         }
         var heap = D3D12_HEAP_PROPERTIES()
         heap.Type = D3D12_HEAP_TYPE_DEFAULT
@@ -392,7 +393,10 @@ public final class D3D12Backend: GPUBackend {
         if removed < 0 { throw GPUError("the GPU device was removed (HRESULT 0x\(String(UInt32(bitPattern: removed), radix: 16)))") }
     }
 
-    public func execute(_ batch: GPUBatch) throws(GPUError) {
+    public func execute(_ batch: GPUBatch) throws(GPUError) { try execute(batch, endStates: []) }
+
+    /// Runs a batch, then leaves the given textures in the given states (a back buffer ready to present).
+    func execute(_ batch: GPUBatch, endStates: [(Int, D3D12_RESOURCE_STATES)]) throws(GPUError) {
         guard !batch.isEmpty else { return }
         func align(_ n: Int, _ a: Int) -> Int { (n + a - 1) / a * a }
         // Upload buffer: instances, data, then each upload's rows (rows 256-byte aligned, placed 512-aligned).
@@ -502,14 +506,16 @@ public final class D3D12Backend: GPUBackend {
                 list.pointee.lpVtbl.pointee.DrawInstanced(list, 4, UInt32(d.instances.count), 0, 0)
             }
         }
+        for (id, state) in endStates { transition(id, to: state) }
         try submitAndWait()
     }
 
     public func read(_ texture: GPUTexture) throws(GPUError) -> [Float] {
-        guard let t = textures[texture.id], texture.format == .rgba16Float else {
-            throw GPUError("only render targets (rgba16Float) can be read back")
+        guard let t = textures[texture.id], texture.format == .rgba16Float || texture.format == .bgra8 else {
+            throw GPUError("only render targets (rgba16Float, bgra8) can be read back")
         }
-        let pitch = (texture.width * 8 + 255) / 256 * 256
+        let bpp = texture.format.bytesPerPixel
+        let pitch = (texture.width * bpp + 255) / 256 * 256
         let size = pitch * texture.height
         if readback == nil || readback!.size < size {
             if let r = readback { release(r.resource) }
@@ -534,8 +540,17 @@ public final class D3D12Backend: GPUBackend {
         var out = [Float](repeating: 0, count: texture.width * texture.height * 4)
         out.withUnsafeMutableBufferPointer { o in
             for y in 0..<texture.height {
-                let row = (p! + y * pitch).assumingMemoryBound(to: UInt16.self)
-                for i in 0..<(texture.width * 4) { o[y * texture.width * 4 + i] = halfToFloat(row[i]) }
+                if bpp == 8 {
+                    let row = (p! + y * pitch).assumingMemoryBound(to: UInt16.self)
+                    for i in 0..<(texture.width * 4) { o[y * texture.width * 4 + i] = halfToFloat(row[i]) }
+                } else {
+                    let row = (p! + y * pitch).assumingMemoryBound(to: UInt8.self)
+                    for x in 0..<texture.width {
+                        let s = x * 4, d = (y * texture.width + x) * 4
+                        o[d] = Float(row[s + 2]) / 255; o[d + 1] = Float(row[s + 1]) / 255
+                        o[d + 2] = Float(row[s]) / 255; o[d + 3] = Float(row[s + 3]) / 255
+                    }
+                }
             }
         }
         var none = D3D12_RANGE(Begin: 0, End: 0)

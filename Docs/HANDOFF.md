@@ -37,6 +37,9 @@ Current state of the work. Every session updates this before it ends.
 - `PolymerPlatform`: `FileSystem` and `Process` interfaces, installed by the
   entry point; Windows backend (Win32, UTF-16 paths) and Mac backend
   (POSIX; written but **not yet compiled on a Mac**).
+- Windows (session 5): `PlatformWindow`, `WindowEvent` and `WindowSystem` in
+  `PolymerPlatform`; the Win32 backend (`Win32Window.swift`); `PolymerApp`
+  with `WindowHost`; `polymer demo [screen]`. See "Windows" below.
 - `PolymerText`:
   - OpenType parser (`FontFace`): table directory and collections, cmap
     4/12, hmtx, `glyf` (simple and composite), CFF with a Type 2
@@ -393,6 +396,50 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
 - Next: frames in flight (no wait per batch), compiled shaders cached,
   a downsampled blur for large radii, glyph masks of the same glyph at
   nearby fractions shared if the atlas churns, the Metal backend.
+
+### Windows (session 5)
+
+- **Interface** (`PolymerPlatform/Window.swift`): a `WindowSystem` makes
+  windows and runs the loop; a `PlatformWindow` gives its native handle, size
+  in pixels and scale, and sends `WindowEvent`s (pointer, wheel, keys with
+  layout characters, resize, close) in points to its `WindowDelegate`, which
+  also draws frames (`frame(time:)` returns whether to keep going).
+  `setNeedsFrame()` is safe from any thread. Installed by the entry point:
+  `Platform.install(windows: Win32WindowSystem())`.
+- **Win32** (`PolymerPlatformWindows/Win32Window.swift`): per-monitor DPI v2
+  (scale = dpi/96, `WM_DPICHANGED` moves to the suggested rectangle),
+  `WS_EX_NOREDIRECTIONBITMAP` (the swap chain is the only content), dark title
+  bar and Mica on the frame (DWM attributes 20 and 38), mouse capture while a
+  button is held, `TrackMouseEvent` for leaving, wheel notches times 40
+  points, keys through `ToUnicode` without disturbing dead keys. The loop
+  sleeps in `MsgWaitForMultipleObjectsEx` until input or a frame request;
+  while a window animates it draws every refresh. During a live resize
+  Windows runs its own loop, so `WM_SIZE` and `WM_PAINT` draw directly.
+  Translations are pure functions (`Win32Input`) checked by `selfCheck()`.
+- **Presenting** (`PolymerGPUD3D12/D3D12Presenter.swift`): a flip-sequential
+  swap chain (two BGRA8 buffers, frame latency 1 with its waitable object, so
+  `waitForFrame` paces drawing to the display at any refresh rate). Each
+  buffer keeps the damage it has missed; a frame copies only that from the
+  half-float target (`.present` program) and passes this frame's damage as
+  dirty rectangles to `Present1`, so DWM recomposites only that. Handle 0
+  gives an offscreen presenter with the same buffers, for checks.
+- **Host** (`PolymerApp/WindowHost.swift`): events to `ViewTree` (pointer,
+  wheel, keys as `KeyPress`), resize to `proposedSize` and `displayScale`;
+  a frame waits for the display, sets `tree.time`, records, draws only the
+  damage into a kept target and presents only that; nothing changed means
+  nothing presented. It still calls `tree.render` (CPU) to get the list and
+  damage until ViewTree can record without drawing (asked of Agent B in
+  `out/coordination.md`); switch `WindowHost.record()` when it lands.
+- **Check** `platform.window`: the backend's `selfCheck` (DPI, signed
+  positions, buttons, wheel direction and amount, keys); the host on a test
+  window with the real GPU presenting offscreen: first frame, a click through
+  events (only its damage presented), Tab and Space, an unchanged frame not
+  presented, a resize to scale 1.5, close; every image equals the CPU.
+- **Never opened by agents.** `polymer demo [screen] [--software]` is for
+  the owner (default screen: glass).
+- Next: text input (IME, `WM_CHAR` for composed text) with Agent B's text
+  editing, the cursor shape, right-click menus, scroll by moving pixels
+  (`pScrollRect`), frames in flight, a see-through window (owner's call).
 
 ### Animation (session 4)
 
@@ -816,6 +863,11 @@ side) to confirm the luminance rule between the two measured colours.
 - macOS floor is 15, because view invalidation uses `Mutex` and `Atomic`
   from Swift's Synchronization module. If i2s must run on older macOS,
   say so and the lock moves behind the platform layer instead.
+- Windows (session 5): the title bar is dark with Mica on the frame; the
+  content is opaque. Mica or Acrylic behind the content itself needs
+  DirectComposition (a premultiplied swap chain) and would make every
+  window see-through where the app draws nothing: say if you want it.
+  A wheel notch scrolls 40 points (a placeholder).
 - Sample screens: `polymer render albums out.png --scale 2`,
   `polymer render counter out.png --scale 2 --click Add --click Step`,
   `polymer render list out.png --scale 2 --scroll 290 --click "Track 12"`.

@@ -422,3 +422,13 @@ struct Atlas {
         shelfY = 0; shelfHeight = 0; cursorX = 0
     }
 }
+
+extension GPURenderer {
+    /// Sets every pixel of `target` to `color` (a new target, or one whose size changed).
+    public func clear(_ target: GPUTexture, to color: Color) throws(GPUError) {
+        var b = GPUBatch()
+        b.commands.append(.clear(GPUSurface(target, x: 0, y: 0), PixelRect(x: 0, y: 0, width: target.width, height: target.height),
+                                 premultiplied(color)))
+        try backend.execute(b)
+    }
+}

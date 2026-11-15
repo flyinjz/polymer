@@ -151,6 +151,11 @@ Blended psBackdrop(VSOut i) {
     return o;
 }
 
+// A target into a window's 8-bit image, over black (the window is opaque).
+float4 psPresent(VSOut i) : SV_Target {
+    return float4(at(pixel(i)).rgb, 1);
+}
+
 float4 psComposite(VSOut i) : SV_Target {
     Instance it = instances[i.id];
     float2 p = pixel(i);

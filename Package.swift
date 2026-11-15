@@ -34,17 +34,20 @@ let package = Package(
         // Views, layout and state.
         .target(name: "PolymerUI", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
 
+        // Windows and scenes: a view tree in a platform window, drawn by the GPU.
+        .target(name: "PolymerApp", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerRender", "PolymerGPU", "PolymerUI"]),
+
         // `import Polymer`: everything an app uses.
         .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI"]),
 
         // Checks run by `polymer check`, headless, the same on every OS.
-        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI"]),
+        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp"]),
 
         // The `polymer` command.
         .executableTarget(
             name: "PolymerTools",
             dependencies: [
-                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerChecks",
+                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerChecks",
                 .target(name: "PolymerGPUD3D12", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),

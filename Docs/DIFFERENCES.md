@@ -57,3 +57,11 @@ deliberate difference is listed here, with the reason.
 
 y grows downward, origin top-left, as in SwiftUI. Font outlines are y-up
 internally and flipped when drawn.
+
+## Windows and input
+
+| SwiftUI / AppKit | Polymer | Why |
+|---|---|---|
+| `NSWindow`, `WindowGroup` | `PlatformWindow` from `Platform.windows`, with `WindowHost` putting a `ViewTree` in it | Scenes come with PolymerApp; until then a host joins a tree, a window and the GPU. |
+| `EventModifiers.command` (⌘) | On Windows, Ctrl gives `.command` and the Windows key `.control` | A shortcut means the same on both OSes: Ctrl-C on Windows is ⌘C on the Mac. |
+| Wheel scrolling | 40 points per wheel notch on Windows | A placeholder for a design token; trackpads send exact distances. |
