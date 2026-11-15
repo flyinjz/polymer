@@ -136,6 +136,56 @@ import PolymerText
         c.expect(ca.bitmap == cb.bitmap, "scaled recording draws the pixels of the scaled geometry")
         c.expectEqual(a.zoom, 1, "zoom restored")
     },
+
+    Check("render.blur") { c in
+        // A pattern with hard edges and colour, premultiplied.
+        let w = 512, h = 384
+        var src = [Float](repeating: 0, count: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                let i = (y * w + x) * 4, a: Float = (x / 37 + y / 23) % 3 == 0 ? 0.5 : 1
+                src[i] = Float((x * 7 + y * 3) % 256) / 255 * a; src[i + 1] = ((x / 16) % 2 == 0 ? 0.9 : 0.1) * a
+                src[i + 2] = Float(y % 64) / 64 * a; src[i + 3] = a
+            }
+        }
+        let clock = ContinuousClock()
+        func ms(_ body: () -> Void) -> Double {
+            let start = clock.now; body(); return (clock.now - start).seconds * 1000
+        }
+        for sigma in [3.0, 6, 16, 40] {
+            var fast: [Float] = [], exact: [Float] = []
+            let tFast = ms { fast = Blur.apply(src, width: w, height: h, sigma: sigma) }
+            let tExact = ms { exact = Blur.direct(src, width: w, height: h, sigma: sigma) }
+            var sum = 0.0, worst = 0.0, light = 0.0, lightExact = 0.0
+            for i in 0..<src.count {
+                let d = Double(abs(fast[i] - exact[i])); sum += d; worst = max(worst, d)
+                if i % 4 == 3 { light += Double(fast[i]); lightExact += Double(exact[i]) }
+            }
+            let mean = sum / Double(src.count)
+            c.note("blur sigma \(sigma) px, 512x384: \(Double(Int(tExact * 10)) / 10) ms direct, \(Double(Int(tFast * 10)) / 10) ms with factor \(Blur.factor(sigma)); mean difference \(Double(Int(mean * 100000)) / 100000), max \(Double(Int(worst * 1000)) / 1000)")
+            // Measured: mean at most 0.002 (half an 8-bit step), worst 0.065 on the sharpest edges.
+            c.expect(mean < 0.006 && worst < 0.08, "sigma \(sigma): the reduced blur strays from the Gaussian: mean \(mean), max \(worst)")
+            c.expect(abs(light - lightExact) / lightExact < 0.002, "sigma \(sigma): light kept (\(light) against \(lightExact))")
+
+            // A part blurred alone, with `reach` of margin, equals that part of the whole.
+            let r = Blur.reach(sigma), part = PixelRect(x: 130, y: 101, width: 120, height: 90)
+            let area = part.outset(by: r).clamped(to: PixelRect(x: 0, y: 0, width: w, height: h))
+            var sub = [Float](repeating: 0, count: area.width * area.height * 4)
+            for y in 0..<area.height {
+                for i in 0..<(area.width * 4) { sub[y * area.width * 4 + i] = src[((area.y + y) * w + area.x) * 4 + i] }
+            }
+            let blurredPart = Blur.apply(sub, width: area.width, height: area.height, sigma: sigma, x: area.x, y: area.y)
+            var same = true
+            for y in part.y..<(part.y + part.height) {
+                for x in part.x..<(part.x + part.width) {
+                    for ch in 0..<4 where blurredPart[((y - area.y) * area.width + x - area.x) * 4 + ch] != fast[(y * w + x) * 4 + ch] { same = false }
+                }
+            }
+            c.expect(same, "sigma \(sigma): a part blurred alone differs from the whole")
+        }
+        let flat = [Float](repeating: 0.25, count: 64 * 48 * 4)
+        c.expect(Blur.apply(flat, width: 64, height: 48, sigma: 20, x: 3, y: 5).allSatisfy { abs($0 - 0.25) < 1e-6 }, "a flat colour stays flat")
+    },
     Check("render.display-list") { c in
         let red = Color(red: 1, green: 0, blue: 0), blue = Color(red: 0, green: 0, blue: 1)
         func list(_ body: (inout DisplayList) -> Void) -> DisplayList {

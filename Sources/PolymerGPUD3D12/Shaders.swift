@@ -151,6 +151,30 @@ Blended psBackdrop(VSOut i) {
     return o;
 }
 
+float4 psDownsample(VSOut i) : SV_Target {
+    Instance it = instances[i.id];
+    int2 g = int2(pixel(i));
+    int f = int(it.p3.x);
+    int2 lo = int2(it.p2.xy), hi = int2(it.p2.zw) - 1;
+    float4 s = 0;
+    for (int j = 0; j < f; j++) {
+        for (int k = 0; k < f; k++) s += at(float2(clamp(g * f + int2(k, j), lo, hi)));
+    }
+    return s * (1.0 / (f * f));
+}
+
+float4 psUpsample(VSOut i) : SV_Target {
+    Instance it = instances[i.id];
+    float f = it.p3.x;
+    float2 size = it.p2.zw - it.p2.xy;
+    float2 u = clamp((pixel(i) + 0.5) / f - 0.5 - it.p2.xy, 0, size - 1);
+    int2 a = int2(u), b = min(a + 1, int2(size) - 1);
+    float2 t = u - a;
+    float4 p = source.Load(int3(a.x, a.y, 0)), q = source.Load(int3(b.x, a.y, 0));
+    float4 r = source.Load(int3(a.x, b.y, 0)), s = source.Load(int3(b.x, b.y, 0));
+    return (p * (1 - t.x) + q * t.x) * (1 - t.y) + (r * (1 - t.x) + s * t.x) * t.y;
+}
+
 // A target into a window's 8-bit image, over black (the window is opaque).
 float4 psPresent(VSOut i) : SV_Target {
     return float4(at(pixel(i)).rgb, 1);

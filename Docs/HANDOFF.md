@@ -419,8 +419,15 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   `out/checks/gpu/` (CPU, GPU, difference x8).
 - **Speed** (release, RTX 5070): the test scene (480x320) 1.9 ms per frame
   including CPU encoding, submit and wait; WARP about 50 ms.
+- **Large blurs** (session 5): above sigma 4 px, `Blur.apply` averages f x f
+  cells (f = 2, 4 or 8) on a grid aligned to image pixels, blurs them with a
+  Gaussian of sqrt(sigma^2 - f^2/4)/f and interpolates back (bilinear); the GPU
+  does the same (`.downsample`, `.upsample`). `Blur.reach` grows to
+  (taps + 2) * f, so a part drawn alone still equals the whole. CPU, 512x384:
+  sigma 16 px 73 -> 3.5 ms, sigma 40 px 200 -> 4 ms, mean difference from the
+  Gaussian at most 0.002 (check `render.blur`). GPU test scene 1.9 -> 0.22 ms.
 - Next: frames in flight (no wait per batch), compiled shaders cached,
-  a downsampled blur for large radii, glyph masks of the same glyph at
+  glyph masks of the same glyph at
   nearby fractions shared if the atlas churns, the Metal backend.
 
 ### Windows (session 5)

@@ -211,7 +211,8 @@ public final class D3D12Backend: GPUBackend {
         let vs = try Self.compile("vsQuad", "vs_5_0")
         defer { release(vs) }
         let entries: [GPUProgram: String] = [.rect: "psRect", .mask: "psMask", .image: "psImage", .blur: "psBlur",
-                                             .backdrop: "psBackdrop", .composite: "psComposite", .present: "psPresent"]
+                                             .backdrop: "psBackdrop", .composite: "psComposite", .present: "psPresent",
+                                             .downsample: "psDownsample", .upsample: "psUpsample"]
         for program in GPUProgram.allCases {
             let ps = try Self.compile(entries[program]!, "ps_5_0")
             defer { release(ps) }
@@ -226,7 +227,7 @@ public final class D3D12Backend: GPUBackend {
             blend.BlendOp = D3D12_BLEND_OP_ADD; blend.BlendOpAlpha = D3D12_BLEND_OP_ADD
             blend.LogicOp = D3D12_LOGIC_OP_NOOP
             switch program {
-            case .blur, .present:
+            case .blur, .present, .downsample, .upsample:
                 blend.BlendEnable = false
                 blend.SrcBlend = D3D12_BLEND_ONE; blend.DestBlend = D3D12_BLEND_ZERO
                 blend.SrcBlendAlpha = D3D12_BLEND_ONE; blend.DestBlendAlpha = D3D12_BLEND_ZERO

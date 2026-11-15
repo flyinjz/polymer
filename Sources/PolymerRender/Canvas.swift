@@ -210,7 +210,7 @@ public struct Canvas {
         var off = Canvas(bounds: area, scale: scale, background: .clear)
         off.glyphCache = glyphCache
         off.draw(list, in: area, range: (begin + 1)..<end)
-        let content = effect.blur > 0 ? Blur.apply(off.pixels, width: area.width, height: area.height, sigma: effect.blur * scale) : off.pixels
+        let content = effect.blur > 0 ? Blur.apply(off.pixels, width: area.width, height: area.height, sigma: effect.blur * scale, x: area.x, y: area.y) : off.pixels
         let o = origin, s = scale
         let mask = effect.mask.map {
             RoundedRect(Rect(x: ($0.rect.minX + o.x) * s, y: ($0.rect.minY + o.y) * s, width: $0.rect.width * s, height: $0.rect.height * s),

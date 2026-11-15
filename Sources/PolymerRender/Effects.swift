@@ -43,7 +43,7 @@ public enum BackdropEffect: Hashable, Sendable {
 
     /// How many pixels beyond a point the effect reads to draw it.
     public func reach(scale: Double) -> Int {
-        let blur = Int((3 * blurRadius * scale).rounded(.up))
+        let blur = Blur.reach(blurRadius * scale)
         switch self {
         case .material: return blur + 1
         case .glass(let g): return blur + Int((g.refraction * scale * (1 + abs(g.dispersion))).rounded(.up)) + 2
@@ -75,8 +75,80 @@ public enum Blur {
         return w.map { Float($0 / sum) }
     }
 
+    /// Up to this standard deviation (pixels) the Gaussian is applied directly; above it, at a lower resolution.
+    public static let directLimit = 4.0
+
+    /// How much a blur of `sigma` pixels is reduced before blurring: 1 (direct), 2, 4 or 8.
+    public static func factor(_ sigma: Double) -> Int {
+        guard sigma > directLimit else { return 1 }
+        var f = 2
+        while f < 8, sigma / Double(2 * f) >= 2 { f *= 2 }
+        return f
+    }
+
+    /// The Gaussian applied at the reduced resolution, so the whole (box, Gaussian, bilinear) has about `sigma`.
+    public static func lowSigma(_ sigma: Double, _ f: Int) -> Double {
+        (sigma * sigma - Double(f * f) / 4).squareRoot() / Double(f)
+    }
+
+    /// How many pixels around a point a blur of `sigma` reads.
+    public static func reach(_ sigma: Double) -> Int {
+        let f = factor(sigma)
+        if f == 1 { return Int((3 * sigma).rounded(.up)) }
+        return (kernel(lowSigma(sigma, f)).count / 2 + 2) * f
+    }
+
+    /// Gaussian blur of a premultiplied RGBA buffer whose top-left is image pixel (`x`, `y`), repeating the edge pixels.
+    ///
+    /// Large blurs (`factor` above 1) average f x f cells on a grid aligned to
+    /// image pixels, blur those, and interpolate back (bilinear), so the cost
+    /// hardly grows with the radius and a part blurred alone (with `reach` of
+    /// margin) equals the same part of a larger area. The GPU does the same.
+    public static func apply(_ src: [Float], width: Int, height: Int, sigma: Double, x: Int = 0, y: Int = 0) -> [Float] {
+        let f = factor(sigma)
+        guard f > 1, width > 0, height > 0 else { return direct(src, width: width, height: height, sigma: sigma) }
+        func floorDiv(_ a: Int, _ b: Int) -> Int { a >= 0 ? a / b : -((-a + b - 1) / b) }
+        let gx0 = floorDiv(x, f), gy0 = floorDiv(y, f)
+        let lw = floorDiv(x + width - 1, f) - gx0 + 1, lh = floorDiv(y + height - 1, f) - gy0 + 1
+        var low = [Float](repeating: 0, count: lw * lh * 4)
+        let inv = 1 / Float(f * f)
+        for gy in 0..<lh {
+            for gx in 0..<lw {
+                var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0
+                for j in 0..<f {
+                    let sy = min(max((gy0 + gy) * f + j - y, 0), height - 1)
+                    for i in 0..<f {
+                        let sx = min(max((gx0 + gx) * f + i - x, 0), width - 1)
+                        let s = (sy * width + sx) * 4
+                        r += src[s]; g += src[s + 1]; b += src[s + 2]; a += src[s + 3]
+                    }
+                }
+                let o = (gy * lw + gx) * 4
+                low[o] = r * inv; low[o + 1] = g * inv; low[o + 2] = b * inv; low[o + 3] = a * inv
+            }
+        }
+        let blurred = direct(low, width: lw, height: lh, sigma: lowSigma(sigma, f))
+        var out = [Float](repeating: 0, count: src.count)
+        let ff = Float(f)
+        for py in 0..<height {
+            let v = min(max((Float(y + py) + 0.5) / ff - 0.5 - Float(gy0), 0), Float(lh - 1))
+            let y0 = Int(v), y1 = min(y0 + 1, lh - 1), ty = v - Float(y0)
+            for px in 0..<width {
+                let u = min(max((Float(x + px) + 0.5) / ff - 0.5 - Float(gx0), 0), Float(lw - 1))
+                let x0 = Int(u), x1 = min(x0 + 1, lw - 1), tx = u - Float(x0)
+                let a = (y0 * lw + x0) * 4, b = (y0 * lw + x1) * 4, c = (y1 * lw + x0) * 4, d = (y1 * lw + x1) * 4
+                let o = (py * width + px) * 4
+                for ch in 0..<4 {
+                    out[o + ch] = (blurred[a + ch] * (1 - tx) + blurred[b + ch] * tx) * (1 - ty)
+                        + (blurred[c + ch] * (1 - tx) + blurred[d + ch] * tx) * ty
+                }
+            }
+        }
+        return out
+    }
+
     /// Separable Gaussian blur of a premultiplied RGBA buffer, repeating the edge pixels.
-    static func apply(_ src: [Float], width: Int, height: Int, sigma: Double) -> [Float] {
+    public static func direct(_ src: [Float], width: Int, height: Int, sigma: Double) -> [Float] {
         let k = kernel(sigma)
         guard k.count > 1, width > 0, height > 0 else { return src }
         let n = k.count / 2
@@ -137,7 +209,7 @@ extension Canvas {
             behind = off.pixels
         }
         let sigma = effect.blurRadius * scale
-        let seen = Blur.apply(behind, width: source.width, height: source.height, sigma: sigma)
+        let seen = Blur.apply(behind, width: source.width, height: source.height, sigma: sigma, x: source.x, y: source.y)
 
         // The shape in pixels.
         let o = origin, s = scale

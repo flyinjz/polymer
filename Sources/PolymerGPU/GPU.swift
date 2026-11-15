@@ -57,6 +57,12 @@ public enum GPUProgram: Int, CaseIterable, Sendable {
     case composite
     /// A render target copied into a `.bgra8` display image, over black. No fields.
     case present
+    /// Large blurs: the average of f x f cells (grid aligned to image pixels) into a smaller target.
+    /// `p2`: pixels to clamp reads to (x0, y0, x1, y1); `p3.x`: f.
+    case downsample
+    /// Large blurs: the small target interpolated back (bilinear), replacing the pixels.
+    /// `p2`: the small target's cells (x0, y0, x1, y1, in cells); `p3.x`: f.
+    case upsample
 }
 
 /// One quad and its parameters: six float4s, as the shaders read them.

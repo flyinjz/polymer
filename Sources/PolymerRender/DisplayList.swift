@@ -212,7 +212,7 @@ public struct DisplayList {
         let grown = Rect(x: area.minX - spread, y: area.minY - spread, width: area.width + 2 * spread, height: area.height + 2 * spread)
         let bounds = PixelRect.covering(grown, origin: origin, scale: scale).clamped(to: clip)
         guard !bounds.isEmpty else { return }
-        let reach = effect.blur > 0 ? Int((3 * effect.blur * scale).rounded(.up)) + 1 : 0
+        let reach = effect.blur > 0 ? Blur.reach(effect.blur * scale) + 1 : 0
         items.append(DisplayItem(operation: .beginLayer(effect), origin: origin, clip: clip, bounds: bounds, reach: reach))
         let saved = clip
         clip = bounds

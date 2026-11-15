@@ -247,6 +247,24 @@ public final class GPURenderer {
 
     /// Gaussian blur of `rect` of `surface` in place, edges repeated (as `Blur.apply`).
     private func blur(_ surface: GPUSurface, _ rect: PixelRect, sigma: Double) throws(GPUError) {
+        let f = Blur.factor(sigma)
+        if f > 1 {
+            // As `Blur.apply`: f x f cells on a grid aligned to image pixels, blurred small, interpolated back.
+            func floorDiv(_ a: Int, _ b: Int) -> Int { a >= 0 ? a / b : -((-a + b - 1) / b) }
+            let gx0 = floorDiv(rect.x, f), gy0 = floorDiv(rect.y, f)
+            let cells = PixelRect(x: gx0, y: gy0, width: floorDiv(rect.x + rect.width - 1, f) - gx0 + 1,
+                                  height: floorDiv(rect.y + rect.height - 1, f) - gy0 + 1)
+            let small = try acquire(cells)
+            add(GPUInstance(quad: quad(cells), p2: quad(rect), p3: SIMD4(Float(f), 0, 0, 0)), .downsample, clip: cells, into: small, source: surface)
+            try blurDirect(small, cells, sigma: Blur.lowSigma(sigma, f))
+            add(GPUInstance(quad: quad(rect), p2: quad(cells), p3: SIMD4(Float(f), 0, 0, 0)), .upsample, clip: rect, into: surface, source: small)
+            release(small)
+            return
+        }
+        try blurDirect(surface, rect, sigma: sigma)
+    }
+
+    private func blurDirect(_ surface: GPUSurface, _ rect: PixelRect, sigma: Double) throws(GPUError) {
         let k = kernel(sigma)
         guard k.count > 1 else { return }
         let first = batch.data.count * 4
