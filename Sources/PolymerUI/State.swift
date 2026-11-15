@@ -225,6 +225,20 @@ final class TreeState {
     }
     /// Views with `.onHover`.
     var hoverNodes: [WeakHoverNode] = []
+    /// Interactive glass in the tree, told when the pointer goes down on it and comes up.
+    var interactiveGlass: [WeakNode] = []
+    func addInteractiveGlass(_ n: Node) {
+        if !interactiveGlass.contains(where: { $0.node === n }) { interactiveGlass.append(WeakNode(node: n)) }
+    }
+    /// Presses the interactive glass under `p`, or (nil) releases every pressed one.
+    func pressInteractiveGlass(at p: Point?) {
+        guard !interactiveGlass.isEmpty else { return }
+        interactiveGlass.removeAll { $0.node?.isMounted != true }
+        for w in interactiveGlass {
+            guard let g = w.node as? InteractiveGlassNode else { continue }
+            if let p { if g.contains(p) { g.setPressed(true) } } else { g.setPressed(false) }
+        }
+    }
     /// Nodes drawing removed children that are still leaving (`Node.ghosts`).
     var ghostOwners: [WeakNode] = []
     func addGhostOwner(_ n: Node) {

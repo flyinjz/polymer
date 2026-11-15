@@ -230,6 +230,8 @@ public final class ViewTree {
             n = node.parent
         }
         if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
+        // Interactive glass answers the press without taking it.
+        state.pressInteractiveGlass(at: point)
         return focusMoved
     }
 
@@ -238,6 +240,7 @@ public final class ViewTree {
     @discardableResult
     public func pointerUp(at point: Point) -> Bool {
         if pointer != point { pointerMoved(to: point) }
+        state.pressInteractiveGlass(at: nil)
         guard let node = pressedNode else { return false }
         pressedNode = nil
         let b = node as? TapNode

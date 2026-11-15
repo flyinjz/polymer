@@ -394,7 +394,82 @@ func coverage(_ b: Bitmap, channel: Int = 0) -> Double {
         try Platform.files.createDirectory(Path.join(c.outputDirectory, "effects"))
         try Platform.files.write(PNG.encode(r.bitmap), to: Path.join(c.outputDirectory, "effects/glass-merging@2x.png"))
     },
+
+    Check("effects.glass-interactive") { c in
+        let photo = try JPEG.decode(try Platform.files.read(Path.join(c.root, "Tests/Fixtures/Images/progressive-mandel.jpg")))
+        let taps = TapCounter()
+        @MainActor func screen(contained: Bool, scale: Double = 1) -> ViewTree {
+            let button = Button { taps.count += 1 } label: { Color.clear.frame(width: 80, height: 40) }
+                .glassEffect(Glass.regular.interactive(), in: Capsule())
+            let content = ZStack {
+                Image(photo).resizable().frame(width: 200, height: 120)
+                if contained { GlassEffectContainer { button } } else { button }
+            }
+            var e = EnvironmentValues()
+            e.displayScale = scale
+            return ViewTree(content, environment: e)
+        }
+        @MainActor func glass(_ t: ViewTree) -> (rect: Rect, tint: Color)? {
+            for i in t.displayList?.items ?? [] {
+                if case .backdrop(.single(let r), .glass(let g)) = i.operation { return (r.rect.offsetBy(dx: i.origin.x, dy: i.origin.y), g.tint) }
+            }
+            return nil
+        }
+        for contained in [false, true] {
+            let tree = screen(contained: contained)
+            let name = contained ? "in a container" : "alone"
+            tree.time = 0
+            _ = tree.render()
+            c.expect(tree.elementTree.contains("Glass (60, 40, 80x40) regular, interactive\n"), "\(name): listed as interactive:\n\(tree.elementTree)")
+            let rest = glass(tree)
+            c.expectEqual(rest?.rect, Rect(x: 60, y: 40, width: 80, height: 40), "\(name): at rest, the capsule")
+
+            // Down off the glass: nothing.
+            tree.pointerDown(at: Point(x: 5, y: 5))
+            c.expect(!tree.elementTree.contains("pressed"), "\(name): a press beside the glass leaves it alone")
+            tree.pointerUp(at: Point(x: 5, y: 5))
+
+            // Down on it: it swells on a spring and brightens, and the button under it still works.
+            tree.pointerDown(at: Point(x: 100, y: 60))
+            c.expect(tree.elementTree.contains("regular, interactive, pressed"), "\(name): pressed")
+            c.expect(tree.isAnimating, "\(name): the press animates")
+            tree.time = 0.08
+            _ = tree.render()
+            let moving = glass(tree)
+            c.expect((moving?.rect.width ?? 0) > 80 && (moving?.rect.width ?? 0) < 84.5, "\(name): growing: \(String(describing: moving?.rect))")
+            c.expect((moving?.tint.red ?? 0) > (rest?.tint.red ?? 1), "\(name): and brighter")
+            tree.time = 1.5
+            _ = tree.render()
+            let held = glass(tree)?.rect
+            c.expect(held.map { abs($0.width - 84) < 1e-9 && abs($0.height - 42) < 1e-9 && abs($0.midX - 100) < 1e-9 } == true,
+                     "\(name): held, 4 points longer about its centre: \(String(describing: held))")
+            let before = taps.count
+            tree.pointerUp(at: Point(x: 100, y: 60))
+            c.expectEqual(taps.count, before + 1, "\(name): the button ran")
+            c.expect(!tree.elementTree.contains("pressed"), "\(name): released")
+            tree.time = 3
+            _ = tree.render()
+            c.expectEqual(glass(tree)?.rect, rest?.rect, "\(name): back at rest")
+            c.expectEqual(glass(tree)?.tint, rest?.tint, "\(name): and its tint")
+            c.expect(!tree.isAnimating, "\(name): settled")
+        }
+
+        // Every frame of a press redraws partially, identical to a whole draw.
+        let t2 = screen(contained: false, scale: 2)
+        _ = t2.render(background: .black)
+        t2.pointerDown(at: Point(x: 100, y: 60))
+        for k in 0...6 {
+            t2.time = Double(k) * 0.04
+            if k == 4 { t2.pointerUp(at: Point(x: 100, y: 60)) }
+            let img = t2.render(background: .black)
+            var whole = Canvas(width: img.width, height: img.height, scale: 2, background: .black)
+            if let l = t2.displayList { whole.draw(l) }
+            c.expect(img == whole.bitmap, "partial frame at \(t2.time) s equals a whole draw")
+        }
+    },
 ]
+
+@MainActor final class TapCounter { var count = 0 }
 
 /// A sample screen for effects: a grid of artwork scrolling under a glass
 /// title bar and merged glass controls, with a material panel.

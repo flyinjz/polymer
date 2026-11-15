@@ -10,6 +10,8 @@ import PolymerRender
 public struct Glass: Hashable, Sendable {
     var style: GlassStyle?
     var name: String
+    /// Set by `interactive()`.
+    var isInteractive = false
 
     /// Frosted, darkened glass for controls and bars.
     public static let regular = Glass(style: GlassStyle(refraction: 6, bezel: 14, frost: 3,
@@ -54,7 +56,8 @@ struct ReduceTransparencyKey: EnvironmentKey { static let defaultValue = false }
 extension View {
     /// Liquid glass behind the view, in `shape` (SwiftUI's default is a capsule).
     public func glassEffect<S: RoundedRectShape>(_ glass: Glass = .regular, in shape: S) -> some View {
-        LayerView(content: self, layer: BackdropView(shape: shape, kind: .glass(glass)), behind: true)
+        InteractiveGlassView(content: LayerView(content: self, layer: BackdropView(shape: shape, kind: .glass(glass)), behind: true),
+                             enabled: glass.isInteractive)
     }
     public func glassEffect(_ glass: Glass = .regular) -> some View { glassEffect(glass, in: Capsule()) }
 
@@ -97,9 +100,15 @@ final class BackdropNode: Node {
     var name = "Glass", label = ""
     /// The `GlassEffectContainer` that draws this glass merged with its neighbours.
     var container: GlassContainerRef?
+    /// The interactive glass node around this glass, which tracks its press.
+    weak var interactive: InteractiveGlassNode?
 
     override var role: String { name }
-    override var detail: String { opaque ? "\(label), opaque" : label }
+    override var detail: String {
+        var d = opaque ? "\(label), opaque" : label
+        if let i = interactive { d += i.pressed ? ", interactive, pressed" : ", interactive" }
+        return d
+    }
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { p.replacingUnspecified(Size(width: 10, height: 10)) }
 
     override func drawContent(_ list: inout DisplayList) {
@@ -116,6 +125,7 @@ final class BackdropNode: Node {
             if shape.cornerRadius == 0 { list.fill(shape.rect, solid) } else { list.fill(shape.path(), solid) }
             return
         }
+        if case .glass(var g) = effect, let i = interactive { g.tint = i.pressedTint(g.tint); list.drawBackdrop(shape, .glass(g)); return }
         list.drawBackdrop(shape, effect)
     }
 }
@@ -235,9 +245,14 @@ final class GlassContainerNode: Node {
         var style: GlassStyle?
         func collect(_ n: Node, _ shift: Point) {
             if let b = n as? BackdropNode, b.container === ref, !b.opaque, case .glass(let g)? = b.effect {
-                let r = b.geometry(b.frame)
+                var r = b.geometry(b.frame)
+                // Interactive glass swells about its centre while pressed (drawn here, outside its own node).
+                if let i = b.interactive, case let s = i.shownScale, s != 1 {
+                    let c = Point(x: i.frame.midX, y: i.frame.midY), q = r.rect
+                    r = RoundedRect(Rect(x: c.x + (q.minX - c.x) * s, y: c.y + (q.minY - c.y) * s, width: q.width * s, height: q.height * s), cornerRadius: r.cornerRadius * s)
+                }
                 shapes.append(RoundedRect(r.rect.offsetBy(dx: shift.x, dy: shift.y), cornerRadius: r.cornerRadius))
-                if style == nil { style = g }
+                if style == nil { style = b.interactive.map { i in var s = g; s.tint = i.pressedTint(g.tint); return s } ?? g }
             }
             let inner = shift + n.contentShift
             for c in n.children { collect(c, inner) }

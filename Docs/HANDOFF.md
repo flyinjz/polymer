@@ -292,8 +292,22 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   difference over a quarter of the bezel, and refraction fades where that
   gradient is weak (the midline of a narrow neck), which removes the crease
   a sharp normal leaves at joins. Check: `effects.glass-container`.
+- **Interactive glass** (Agent B, session 5; `InteractiveGlass.swift`):
+  `Glass.interactive()`. `.glassEffect` wraps its view in an
+  `InteractiveGlassNode` (a plain pass-through when not interactive). The
+  tree keeps a list of them; `pointerDown` presses those whose glass shape
+  is under the pointer (without taking the click), `pointerUp` releases
+  all. The press is a spring (`InteractiveGlassLook`: 0.3 s, damping 0.6)
+  from 0 to 1: the view and its glass are drawn scaled about their centre
+  so the longer side grows 4 points, and the tint moves 12% toward white.
+  Inside a `GlassEffectContainer` the container scales that shape and tint
+  itself. The element tree shows "interactive" and "pressed". The amounts
+  are placeholders for design tokens. Check: `effects.glass-interactive`
+  (alone and in a container: press off the glass does nothing, growth and
+  brightening on the way, 84x42 held, the button still runs, back to rest;
+  partial frames equal whole draws).
 - Next: GPU versions, glass with different styles in one container
-  (today the first one's style is used), `interactive()`,
+  (today the first one's style is used),
   shadows if the design system wants them, speed (the CPU blur is
   direct; a box-filter approximation or downsampling for large radii).
 
@@ -368,7 +382,7 @@ DESIGN section 11 is the design; this is how the CPU reference does it.
   colours, `.scale` both ways, `.scaleEffect`, partial frames equal whole
   draws).
 - Next: animated scroll positions (`ScrollViewReader.scrollTo` in
-  `withAnimation`), `interactive()` glass on top of this; `Animatable`,
+  `withAnimation`); `Animatable`,
   `.delay`, `.speed`, `.repeatForever` when screens need them. Known
   limits: a button inside `.scaleEffect` counts its unscaled area for
   release; a leaving view moved in from outside a scroll view's clip is
@@ -692,6 +706,15 @@ side) to confirm the luminance rule between the two measured colours.
   LRU yet).
 
 ## For the owner's review (design-visible, not blocking)
+
+- Interactive glass (Agent B, session 5): pressed, the glass and its view
+  grow 4 points on the longer side on a lively spring (0.3 s, damping 0.6)
+  and the tint moves 12% toward white. Say if it should be subtler, also
+  respond to hover, or light up where it is pressed (SwiftUI does; it would
+  be a painted highlight, close to "glow").
+- Transitions (Agent B, session 5): views inserted or removed under an
+  animation fade by default, as in SwiftUI. If the pgr look wants
+  something else by default (no transition, or a short move), say so.
 
 - `Divider` is 1 point thick and uses a separator colour of white at 14%
   opacity until PolymerDesign tokens exist. On 2x screens that is 2
