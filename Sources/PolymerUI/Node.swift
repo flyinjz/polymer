@@ -21,6 +21,10 @@ public struct ProposedViewSize: Hashable, Sendable {
 class Node {
     /// Role shown in the element tree ("Text", "VStack", ...).
     var role: String { "View" }
+    /// Relative space allocation priority in HStack/VStack (default 0).
+    var layoutPriority: Double { 0 }
+    /// Relative front-to-back drawing and hit-testing order inside a stack (default 0).
+    var zIndex: Double { 0 }
     final var children: [Node] = []
     final weak var parent: Node?
     final private(set) var frame: Rect = .zero

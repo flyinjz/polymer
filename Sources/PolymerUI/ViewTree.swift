@@ -7,9 +7,9 @@ import PolymerRender
 
 @MainActor
 public final class ViewTree {
-    private let state = TreeState()
+    let state = TreeState()
     private let glyphCache = GlyphCache()
-    private var root: Node?
+    var root: Node?
     private var resolveRoot: (Node?, ResolveContext) -> Node
     private var needsResolve = true
     private var needsLayout = true
@@ -17,11 +17,22 @@ public final class ViewTree {
     private var pointer: Point?
     /// The button or tap handler the pointer went down on.
     private weak var pressedNode: Node?
+    /// Active drag gesture session (candidate or in-progress).
+    private var activeDrag: ActiveDragSession?
+    /// Active text control being pointer-dragged for caret/selection.
+    private weak var activeTextNode: (any TextEditableNode)?
+    /// Currently open context menu overlay, if any.
+    var contextMenuRoot: Node?
+    private var contextMenuAnchor: Point = .zero
+    private weak var contextMenuSource: ContextMenuNode?
     /// The last frame: what it drew, its pixels and background.
     private var lastList: DisplayList?
     private var spareList: DisplayList?
     private var frameCanvas: Canvas?
     private var frameBackground: Color?
+
+    /// True while a context menu overlay is currently open.
+    public var hasOpenContextMenu: Bool { contextMenuRoot != nil }
 
     /// Pixel rectangles the last `render()` drew: the whole image the first
     /// time (or after a size or background change), then only what changed
@@ -130,10 +141,25 @@ public final class ViewTree {
             s = Size(width: (s.width * scale).rounded(.up) / scale, height: (s.height * scale).rounded(.up) / scale)
             root.place(Rect(origin: .zero, size: s))
             size = s
+            layoutContextMenu()
             if !state.layoutRequested { return }
         }
         state.layoutRequested = false
         Logger("PolymerUI").error("Layout did not settle after 8 passes: a row in a lazy stack changes size every time it is measured. Give rows a size that depends only on their content and the width offered.")
+    }
+
+    private func layoutContextMenu() {
+        guard let menu = contextMenuRoot else { return }
+        if let src = contextMenuSource, !src.isMounted {
+            dismissContextMenu()
+            return
+        }
+        let scale = environment.displayScale
+        var ms = menu.measure(.unspecified)
+        ms = Size(width: (ms.width * scale).rounded(.up) / scale, height: (ms.height * scale).rounded(.up) / scale)
+        let mx = max(0, min(contextMenuAnchor.x, max(0, size.width - ms.width)))
+        let my = max(0, min(contextMenuAnchor.y, max(0, size.height - ms.height)))
+        menu.place(Rect(origin: Point(x: mx, y: my), size: ms))
     }
 
     /// Draws the tree into an image of the root's size at the display scale.
@@ -150,6 +176,7 @@ public final class ViewTree {
         spareList = nil
         list.removeAll()
         root?.draw(&list)
+        contextMenuRoot?.draw(&list)
         if var canvas = frameCanvas, canvas.width == w, canvas.height == h, canvas.scale == scale,
            frameBackground == background, let old = lastList {
             frameCanvas = nil   // the only reference, so drawing doesn't copy the pixels
@@ -181,6 +208,7 @@ public final class ViewTree {
         update()
         var out = ""
         root?.dump(into: &out, depth: 0, focused: state.focused)
+        contextMenuRoot?.dump(into: &out, depth: 0, focused: state.focused)
         return out
     }
 
@@ -197,26 +225,88 @@ public final class ViewTree {
     }
 
     /// The pointer moved to `point` (points from the top-left). Updates
-    /// hover handlers, and whether a held button shows as pressed.
+    /// hover handlers, drag gestures, text drag selection, and whether a held button shows as pressed.
     public func pointerMoved(to point: Point) {
         update()
         pointer = point
+        if var drag = activeDrag {
+            if let node = drag.node, node.isMounted, node.isEnabled {
+                let dx = point.x - drag.startLocation.x
+                let dy = point.y - drag.startLocation.y
+                let distance = (dx * dx + dy * dy).squareRoot()
+                if !drag.isActive, distance >= node.gesture.minimumDistance {
+                    drag.isActive = true
+                    if node.priority != .simultaneous {
+                        if let b = pressedNode as? TapNode, b.isButton { setPressed(b, false) }
+                        pressedNode = nil
+                    }
+                }
+                if drag.isActive {
+                    let pred = Point(
+                        x: point.x + (point.x - drag.lastLocation.x) * 2,
+                        y: point.y + (point.y - drag.lastLocation.y) * 2
+                    )
+                    let value = DragGesture.Value(
+                        startLocation: drag.startLocation,
+                        location: point,
+                        predictedEndLocation: pred
+                    )
+                    drag.lastLocation = point
+                    activeDrag = drag
+                    node.gesture.onChangedAction?(value)
+                } else {
+                    activeDrag = drag
+                }
+            } else {
+                activeDrag = nil
+            }
+        }
+        if let textNode = activeTextNode, textNode.isMounted, textNode.isTextEditableEnabled {
+            textNode.textPointerDragged(to: point)
+        }
         if let b = pressedNode as? TapNode, b.isButton { setPressed(b, b.isUnderPointer(point)) }
         state.updateHover(point)
     }
 
-    /// The pointer left the window: hover handlers are told it is gone.
+    /// The pointer left the window: hover handlers are told it is gone and active drags end.
     public func pointerExited() {
+        if let drag = activeDrag {
+            activeDrag = nil
+            if drag.isActive, let node = drag.node, node.isMounted, node.isEnabled {
+                let value = DragGesture.Value(startLocation: drag.startLocation, location: drag.lastLocation)
+                node.gesture.onEndedAction?(value)
+            }
+        }
+        activeTextNode = nil
         pointer = nil
         state.updateHover(nil)
     }
 
     /// The pointer went down at `point`. A focusable view under it takes
     /// focus (buttons do not, as on macOS); a button under it shows as
-    /// pressed. Returns true when focus moved.
+    /// pressed. Returns true when focus moved or an open context menu was dismissed.
     @discardableResult
     public func pointerDown(at point: Point) -> Bool {
         if pointer != point { pointerMoved(to: point) }
+        activeDrag = nil
+        activeTextNode = nil
+
+        if let menu = contextMenuRoot {
+            guard let hit = menu.hitTest(point) else {
+                dismissContextMenu()
+                return true
+            }
+            var n: Node? = hit
+            pressedNode = nil
+            while let node = n {
+                if let t = node as? TapNode, t.isButton, !t.isEnabled { break }
+                if node.tapAction != nil { pressedNode = node; break }
+                n = node.parent
+            }
+            if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
+            return false
+        }
+
         let hit = root?.hitTest(point)
         var focusMoved = false
         var n = hit
@@ -227,15 +317,55 @@ public final class ViewTree {
             }
             n = node.parent
         }
+
+        // Caret placement / drag selection in TextField or TextEditor.
         n = hit
-        pressedNode = nil
         while let node = n {
-            // A disabled button swallows the press rather than passing it outward.
-            if let t = node as? TapNode, t.isButton, !t.isEnabled { break }
-            if node.tapAction != nil { pressedNode = node; break }
+            if let textNode = node as? any TextEditableNode {
+                if textNode.isTextEditableEnabled {
+                    activeTextNode = textNode
+                    textNode.textPointerDown(at: point)
+                }
+                break
+            }
             n = node.parent
         }
-        if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
+
+        // Candidate drag gesture along the ancestor chain (highPriorityGesture wins over normal).
+        var chosenDrag: DragGestureNode? = nil
+        n = hit
+        while let node = n {
+            if let dg = node as? DragGestureNode, dg.isEnabled {
+                if chosenDrag == nil || dg.priority == .high {
+                    chosenDrag = dg
+                }
+            }
+            n = node.parent
+        }
+
+        var dragConsumedPress = false
+        if let dg = chosenDrag {
+            if dg.gesture.minimumDistance <= 0 {
+                activeDrag = ActiveDragSession(node: dg, startLocation: point, lastLocation: point, isActive: true)
+                let value = DragGesture.Value(startLocation: point, location: point)
+                dg.gesture.onChangedAction?(value)
+                dragConsumedPress = dg.priority != .simultaneous
+            } else {
+                activeDrag = ActiveDragSession(node: dg, startLocation: point, lastLocation: point, isActive: false)
+            }
+        }
+
+        pressedNode = nil
+        if !dragConsumedPress {
+            n = hit
+            while let node = n {
+                // A disabled button swallows the press rather than passing it outward.
+                if let t = node as? TapNode, t.isButton, !t.isEnabled { break }
+                if node.tapAction != nil { pressedNode = node; break }
+                n = node.parent
+            }
+            if let b = pressedNode as? TapNode, b.isButton { setPressed(b, true) }
+        }
         return focusMoved
     }
 
@@ -244,20 +374,109 @@ public final class ViewTree {
     @discardableResult
     public func pointerUp(at point: Point) -> Bool {
         if pointer != point { pointerMoved(to: point) }
+        if let textNode = activeTextNode {
+            activeTextNode = nil
+            if textNode.isMounted, textNode.isTextEditableEnabled {
+                textNode.textPointerUp(at: point)
+            }
+        }
+        if let drag = activeDrag {
+            activeDrag = nil
+            if drag.isActive, let node = drag.node, node.isMounted, node.isEnabled {
+                let pred = Point(
+                    x: point.x + (point.x - drag.lastLocation.x) * 2,
+                    y: point.y + (point.y - drag.lastLocation.y) * 2
+                )
+                let value = DragGesture.Value(
+                    startLocation: drag.startLocation,
+                    location: point,
+                    predictedEndLocation: pred
+                )
+                node.gesture.onEndedAction?(value)
+                if node.priority != .simultaneous {
+                    if let b = pressedNode as? TapNode, b.isButton { setPressed(b, false) }
+                    pressedNode = nil
+                    return true
+                }
+            }
+        }
         guard let node = pressedNode else { return false }
         pressedNode = nil
         let b = node as? TapNode
         if let b, b.isButton { setPressed(b, false) }
+        let inMenu = contextMenuRoot.map { isDescendant(node, of: $0) } ?? false
+        let hitRoot = inMenu ? contextMenuRoot : root
         // A button counts its whole label area; a tap handler only what it draws.
         let over: Bool
         if let b, b.isButton { over = b.isUnderPointer(point) } else {
-            var h = root?.hitTest(point)
+            var h = hitRoot?.hitTest(point)
             while let x = h, x !== node { h = x.parent }
             over = h != nil
         }
         guard over, node.isMounted, let action = node.tapAction else { return false }
         action()
+        if inMenu { dismissContextMenu() }
         return true
+    }
+
+    private func isDescendant(_ node: Node, of ancestor: Node) -> Bool {
+        var cur: Node? = node
+        while let n = cur {
+            if n === ancestor { return true }
+            cur = n.parent
+        }
+        return false
+    }
+
+    // MARK: Secondary click / Context menu
+
+    /// Opens the context menu attached to the view under `point`, if any.
+    @discardableResult
+    public func secondaryClick(at point: Point) -> Bool {
+        update()
+        dismissContextMenu()
+        let hit = root?.hitTest(point)
+        var n = hit
+        while let node = n {
+            if let cm = node as? ContextMenuNode, cm.isEnabled, let makeMenu = cm.makeMenu {
+                let ctx = ResolveContext(environment: cm.capturedEnvironment, stackAxis: nil, tree: state, host: nil)
+                let menuNode = makeMenu(nil, ctx)
+                contextMenuRoot = menuNode
+                contextMenuAnchor = point
+                contextMenuSource = cm
+                layoutContextMenu()
+                return true
+            }
+            n = node.parent
+        }
+        return false
+    }
+
+    /// Alias for `secondaryClick(at:)`.
+    @discardableResult
+    public func rightClick(at point: Point) -> Bool {
+        secondaryClick(at: point)
+    }
+
+    /// Right-clicks the middle of the first text that reads exactly `text`.
+    @discardableResult
+    public func rightClick(text: String) -> Bool {
+        guard let p = point(ofText: text) else { return false }
+        return secondaryClick(at: p)
+    }
+
+    /// Right-clicks the middle of the first element with `.accessibilityIdentifier(id)`.
+    @discardableResult
+    public func rightClick(id: String) -> Bool {
+        guard let p = point(ofID: id) else { return false }
+        return secondaryClick(at: p)
+    }
+
+    /// Closes any currently open context menu overlay.
+    public func dismissContextMenu() {
+        contextMenuRoot?.unmount()
+        contextMenuRoot = nil
+        contextMenuSource = nil
     }
 
     private func setPressed(_ b: TapNode, _ down: Bool) {
@@ -273,6 +492,10 @@ public final class ViewTree {
     @discardableResult
     public func key(_ press: KeyPress) -> Bool {
         update()
+        if contextMenuRoot != nil, press.key == .escape, press.phase == .down {
+            dismissContextMenu()
+            return true
+        }
         var n = state.focused
         while let node = n {
             if node.handle(press) == .handled { return true }
@@ -341,7 +564,10 @@ public final class ViewTree {
         for w in state.animatables {
             guard let a = w.node, a.isMounted else { continue }
             if a.tick(dt) { anyActive = true }
-            if a is ScrollNode { hoverNeedsRefresh = true }
+            if let s = a as? ScrollNode {
+                notifyLazyGrids(in: s)
+                hoverNeedsRefresh = true
+            }
         }
         state.animatables.removeAll { $0.node.map { !$0.isMounted || !$0.isAnimating } ?? true }
         if hoverNeedsRefresh, pointer != nil, !state.hoverNodes.isEmpty {
@@ -380,7 +606,9 @@ public final class ViewTree {
     /// The middle of the first element with `.accessibilityIdentifier(id)`, in screen points.
     public func point(ofID id: String) -> Point? {
         update()
-        guard let node = root?.first(where: { $0.accessibilityID == id }) else { return nil }
+        let node = contextMenuRoot?.first(where: { $0.accessibilityID == id })
+            ?? root?.first(where: { $0.accessibilityID == id })
+        guard let node else { return nil }
         let f = node.screenFrame
         return Point(x: f.midX, y: f.midY)
     }
@@ -402,7 +630,9 @@ public final class ViewTree {
     /// The middle of the first text that reads exactly `text`, in screen points; nil when there is none.
     public func point(ofText text: String) -> Point? {
         update()
-        guard let node = root?.first(where: { ($0 as? TextNode)?.string == text }) else { return nil }
+        let node = contextMenuRoot?.first(where: { ($0 as? TextNode)?.string == text })
+            ?? root?.first(where: { ($0 as? TextNode)?.string == text })
+        guard let node else { return nil }
         let f = node.screenFrame
         return Point(x: f.midX, y: f.midY)
     }
@@ -420,6 +650,7 @@ public final class ViewTree {
             if let s = node as? ScrollNode {
                 s.stopFling()
                 if s.scroll(dx: dx, dy: dy) {
+                    notifyLazyGrids(in: s)
                     // Content moved under the pointer.
                     if pointer != nil, !state.hoverNodes.isEmpty { update(); state.updateHover(pointer) }
                     return true
@@ -428,5 +659,16 @@ public final class ViewTree {
             n = node.parent
         }
         return false
+    }
+
+    private func notifyLazyGrids(in scrollNode: ScrollNode) {
+        func visit(_ node: Node) {
+            for child in node.children {
+                if child is ScrollNode { continue }
+                if let grid = child as? LazyGridNode { grid.viewportMoved() }
+                visit(child)
+            }
+        }
+        visit(scrollNode)
     }
 }

@@ -130,19 +130,49 @@ final class StackNode: Node {
             return items.map { $0.measure(proposal(main: nil, cross: crossP)) }
         }
         // Flexibility: how much a child can grow between its smallest and largest size.
-        let flex = items.map { c -> Double in
-            let lo = main(c.measure(proposal(main: 0, cross: crossP)))
+        let loSizes = items.map { main($0.measure(proposal(main: 0, cross: crossP))) }
+        let flex = items.enumerated().map { idx, c -> Double in
             let hi = main(c.measure(proposal(main: .infinity, cross: crossP)))
-            return hi - lo
+            return hi - loSizes[idx]
         }
-        let order = (0..<n).sorted { flex[$0] < flex[$1] || (flex[$0] == flex[$1] && $0 < $1) }
         var remaining = max(0, total - gaps)
         var sizes = [Size](repeating: .zero, count: n)
-        for (k, i) in order.enumerated() {
-            let share = remaining / Double(n - k)
-            let s = items[i].measure(proposal(main: share, cross: crossP))
-            sizes[i] = s
-            remaining = max(0, remaining - main(s))
+
+        let hasPriorities = items.contains { $0.layoutPriority != 0 }
+        if !hasPriorities {
+            let order = (0..<n).sorted { flex[$0] < flex[$1] || (flex[$0] == flex[$1] && $0 < $1) }
+            for (k, i) in order.enumerated() {
+                let share = remaining / Double(n - k)
+                let s = items[i].measure(proposal(main: share, cross: crossP))
+                sizes[i] = s
+                remaining = max(0, remaining - main(s))
+            }
+            return sizes
+        }
+
+        // Higher-priority groups are allocated first; lower-priority items reserve their minimum size.
+        var priorities: [Double] = []
+        for item in items {
+            let prio = item.layoutPriority
+            if !priorities.contains(prio) { priorities.append(prio) }
+        }
+        priorities.sort(by: >)
+
+        for prio in priorities {
+            let group = (0..<n).filter { items[$0].layoutPriority == prio }
+            let lowerMinSum = (0..<n)
+                .filter { items[$0].layoutPriority < prio }
+                .reduce(0.0) { $0 + loSizes[$1] }
+            var budget = max(0, remaining - lowerMinSum)
+            let order = group.sorted { flex[$0] < flex[$1] || (flex[$0] == flex[$1] && $0 < $1) }
+            for (k, i) in order.enumerated() {
+                let share = budget / Double(order.count - k)
+                let s = items[i].measure(proposal(main: share, cross: crossP))
+                sizes[i] = s
+                let used = main(s)
+                budget = max(0, budget - used)
+                remaining = max(0, remaining - used)
+            }
         }
         return sizes
     }
@@ -157,7 +187,34 @@ final class StackNode: Node {
 
     /// Draws only the children that can be seen (inside a scroll view most are not).
     override func draw(_ list: inout DisplayList) {
-        for c in flat where list.isVisible(c.frame) { c.draw(&list) }
+        let items = flat
+        if items.contains(where: { $0.zIndex != 0 }) {
+            let ordered = items.enumerated().sorted {
+                if $0.element.zIndex != $1.element.zIndex { return $0.element.zIndex < $1.element.zIndex }
+                return $0.offset < $1.offset
+            }
+            for entry in ordered where list.isVisible(entry.element.frame) { entry.element.draw(&list) }
+            return
+        }
+        for c in items where list.isVisible(c.frame) { c.draw(&list) }
+    }
+
+    override func hitTest(_ p: Point) -> Node? {
+        let items = flat
+        guard items.contains(where: { $0.zIndex != 0 }) else { return super.hitTest(p) }
+        let ordered = items.enumerated().sorted {
+            if $0.element.zIndex != $1.element.zIndex { return $0.element.zIndex < $1.element.zIndex }
+            return $0.offset < $1.offset
+        }
+        for entry in ordered.reversed() {
+            if let h = entry.element.hitTest(p) { return h }
+            var anc = entry.element.parent
+            while let a = anc, a !== self {
+                if let t = a as? TapNode, t.isButton, t.contentFrame.contains(p) { return t }
+                anc = a.parent
+            }
+        }
+        return nil
     }
 
     override func placeChildren(in r: Rect) {
@@ -188,5 +245,34 @@ final class ZStackNode: Node {
             let s = c.measure(ProposedViewSize(r.size))
             c.place(Rect(origin: alignment.origin(of: s, in: r), size: s))
         }
+    }
+    override func draw(_ list: inout DisplayList) {
+        let items = flat
+        if items.contains(where: { $0.zIndex != 0 }) {
+            let ordered = items.enumerated().sorted {
+                if $0.element.zIndex != $1.element.zIndex { return $0.element.zIndex < $1.element.zIndex }
+                return $0.offset < $1.offset
+            }
+            for entry in ordered { entry.element.draw(&list) }
+            return
+        }
+        super.draw(&list)
+    }
+    override func hitTest(_ p: Point) -> Node? {
+        let items = flat
+        guard items.contains(where: { $0.zIndex != 0 }) else { return super.hitTest(p) }
+        let ordered = items.enumerated().sorted {
+            if $0.element.zIndex != $1.element.zIndex { return $0.element.zIndex < $1.element.zIndex }
+            return $0.offset < $1.offset
+        }
+        for entry in ordered.reversed() {
+            if let h = entry.element.hitTest(p) { return h }
+            var anc = entry.element.parent
+            while let a = anc, a !== self {
+                if let t = a as? TapNode, t.isButton, t.contentFrame.contains(p) { return t }
+                anc = a.parent
+            }
+        }
+        return nil
     }
 }
