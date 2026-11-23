@@ -20,16 +20,19 @@ let usage = """
 
     Commands:
       check [filter] [--list] [--verbose]    Run the headless checks (all, or names containing filter).
-      render <screen> <out.png> [--scale N] [--click "text"] [--click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
+      render <screen> <out.png> [--scale N] [--click "text"] [--click-id "id"] [--right-click "text"] [--right-click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
                                              Render a screen to a PNG, headless.
-      tree <screen> [--click "text"] [--click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
-                                             Print a screen's element tree (role, frame, details).
+      tree <screen> [--a11y] [--click "text"] [--click-id "id"] [--right-click "text"] [--right-click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
+                                             Print a screen's element tree (or accessibility tree with --a11y).
+      describe [section] [--json]            Self-describing API, modifier, token, and command reference.
       zoom <in> <out> x y w h factor         Crop a PNG and enlarge it, for inspecting pixels.
       help                                   Show this text.
 
-    Screens: \(sampleScreenNames.joined(separator: ", ")).
+    Screens: \(toolScreenNames.joined(separator: ", ")).
     --click presses the button or tap handler under the text that reads exactly "text";
     --click-id presses the element with .accessibilityIdentifier("id");
+    --right-click secondary-clicks the element under "text" (opening its .contextMenu if any);
+    --right-click-id secondary-clicks the element with .accessibilityIdentifier("id");
     --scroll moves the scroll view in the middle of the screen down by N points (up when negative).
     --key presses a key: "tab", "shift+tab", "space", "return", "down", "cmd+a", "x".
     --hover moves the pointer over the text; --press holds the pointer down on it (to see pressed looks).
@@ -43,7 +46,10 @@ Logger.sink = { level, category, message in
 }
 
 // Arguments: options that take a value are listed here; everything else starting with "--" is a flag.
-let valueOptions: Set<String> = ["--scale", "--click", "--click-id", "--scroll", "--key", "--hover", "--press"]
+let valueOptions: Set<String> = [
+    "--scale", "--click", "--click-id", "--right-click", "--right-click-id",
+    "--scroll", "--key", "--hover", "--press",
+]
 var positionals: [String] = []
 var flags: Set<String> = []
 var values: [String: [String]] = [:]
@@ -109,11 +115,18 @@ case "render":
 case "tree":
     do {
         guard let screen = positional(1) else {
-            print("usage: polymer tree <screen> [--click \"text\"]...")
+            print("usage: polymer tree <screen> [--a11y] [--click \"text\"]...")
             Platform.process.exit(2)
         }
-        print(try screenTree(screen, scale: 1, steps: steps).elementTree, terminator: "")
+        let tree = try screenTree(screen, scale: 1, steps: steps)
+        if flags.contains("--a11y") {
+            print(tree.accessibilityTree().describeTree(), terminator: "")
+        } else {
+            print(tree.elementTree, terminator: "")
+        }
     } catch { print(error); Platform.process.exit(1) }
+case "describe":
+    describeCommand(section: positional(1), asJSON: flags.contains("--json"), root: root)
 case "help", nil:
     print(usage)
 case let other?:

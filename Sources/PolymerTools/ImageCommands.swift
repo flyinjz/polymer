@@ -1,8 +1,15 @@
+import Observation
 import PolymerBase
 import PolymerPlatform
+import PolymerText
 import PolymerRender
 import PolymerUI
+import PolymerApp
+import PolymerDesign
 import PolymerChecks
+
+@MainActor
+let toolScreenNames = sampleScreenNames + ["design"]
 
 /// `polymer zoom <in.png> <out.png> x y width height factor`: crop and enlarge (nearest neighbour), for inspecting pixels.
 func zoomCommand(_ a: [String]) throws {
@@ -22,11 +29,98 @@ func zoomCommand(_ a: [String]) throws {
     try Platform.files.write(PNG.encode(out), to: a[1])
 }
 
-/// A sample screen as a live tree, after the `--click` and `--scroll` steps have been applied in order.
+@MainActor
+@Observable
+private final class DesignShowcaseModel {
+    var themeIndex = 0
+    var notificationsOn = true
+    var volume = 0.65
+    var query = "Polymer"
+    var status = "Ready"
+
+    var activeTheme: Theme {
+        switch themeIndex % 3 {
+        case 0: .pgr
+        case 1: .dark
+        default: .light
+        }
+    }
+
+    func cycleTheme() {
+        themeIndex = (themeIndex + 1) % 3
+        status = "Theme: \(activeTheme.name)"
+    }
+}
+
+private struct DesignShowcaseView: View {
+    let model: DesignShowcaseModel
+    let font: Font
+
+    var body: some View {
+        let theme = model.activeTheme
+        let commands = [
+            Command(id: "theme.cycle", title: "Cycle Theme", category: "View", shortcut: KeyShortcut("cmd+t")) {
+                model.cycleTheme()
+            },
+            Command(id: "status.reset", title: "Reset Status", category: "View") {
+                model.status = "Reset"
+            },
+        ]
+        VStack(alignment: .leading, spacing: theme.spacing.md) {
+            HStack(spacing: theme.spacing.sm) {
+                Text("Workspace")
+                    .accessibilityIdentifier("workspace.title")
+                Spacer()
+                Text(model.status)
+                    .foregroundStyle(theme.colors.textSecondary)
+            }
+            HairlineDivider()
+            PolymerPanel {
+                VStack(alignment: .leading, spacing: theme.spacing.sm) {
+                    TextField("Search", text: Binding(get: { model.query }, set: { model.query = $0 }))
+                        .accessibilityIdentifier("workspace.search")
+                    PolymerToggle("Notifications", isOn: Binding(get: { model.notificationsOn }, set: { model.notificationsOn = $0 }))
+                    PolymerSlider(value: Binding(get: { model.volume }, set: { model.volume = $0 }), in: 0...1)
+                    HStack(spacing: theme.spacing.sm) {
+                        Button("Cycle Theme") { model.cycleTheme() }
+                            .buttonStyle(.polymerPrimary)
+                        Button("Reset") { model.status = "Reset" }
+                            .buttonStyle(.polymerSecondary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("workspace.panel")
+            .contextMenu {
+                PolymerContextMenu(commands: commands)
+            }
+        }
+        .padding(theme.spacing.md)
+        .frame(width: 420, height: 280, alignment: .topLeading)
+        .background(theme.colors.background)
+        .font(font)
+        .theme(theme)
+    }
+}
+
+@MainActor
+private func buildDesignScreen(root: String, scale: Double) throws -> ViewTree {
+    let face = try TextReference.font(root: root, "Geist-Regular.otf")
+    let model = DesignShowcaseModel()
+    var env = EnvironmentValues()
+    env.displayScale = scale
+    return ViewTree(DesignShowcaseView(model: model, font: Font(face, size: 13)), environment: env)
+}
+
+/// A sample screen as a live tree, after the input steps have been applied in order.
 @MainActor
 func screenTree(_ name: String, scale: Double, steps: [(option: String, value: String)]) throws -> ViewTree {
-    guard let tree = try sampleTree(name, root: ".", scale: scale) else {
-        print("Unknown screen \"\(name)\". Available: \(sampleScreenNames.joined(separator: ", "))")
+    let tree: ViewTree
+    if name == "design" {
+        tree = try buildDesignScreen(root: ".", scale: scale)
+    } else if let sample = try sampleTree(name, root: ".", scale: scale) {
+        tree = sample
+    } else {
+        print("Unknown screen \"\(name)\". Available: \(toolScreenNames.joined(separator: ", "))")
         Platform.process.exit(2)
     }
     for step in steps {
@@ -39,6 +133,22 @@ func screenTree(_ name: String, scale: Double, steps: [(option: String, value: S
         } else if step.option == "--click-id" {
             if !tree.click(id: step.value) {
                 print("--click-id \"\(step.value)\": no element has accessibilityIdentifier \"\(step.value)\". `polymer tree \(name)` lists #ids on the screen.")
+                Platform.process.exit(1)
+            }
+        } else if step.option == "--right-click" {
+            let handled: Bool
+            if step.value.hasPrefix("#") {
+                handled = tree.rightClick(id: String(step.value.dropFirst()))
+            } else {
+                handled = tree.rightClick(text: step.value)
+            }
+            if !handled {
+                print("--right-click \"\(step.value)\": no element with a .contextMenu matched \"\(step.value)\". `polymer tree \(name)` lists texts and #ids on the screen.")
+                Platform.process.exit(1)
+            }
+        } else if step.option == "--right-click-id" {
+            if !tree.rightClick(id: step.value) {
+                print("--right-click-id \"\(step.value)\": no element with accessibilityIdentifier \"\(step.value)\" has a .contextMenu.")
                 Platform.process.exit(1)
             }
         } else if step.option == "--hover" || step.option == "--press" {

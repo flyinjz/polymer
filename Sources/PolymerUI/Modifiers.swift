@@ -32,6 +32,21 @@ extension View {
     /// Hides whatever the view draws outside its frame.
     public func clipped() -> some View { ClipView(content: self) }
 
+    /// Clips this view to the given `Shape` (bounding rect for display-list clipping
+    /// and exact shape containment for hit-testing).
+    public func clipShape<S: Shape>(_ shape: S) -> some View { ClipShapeView(content: self, shape: shape) }
+
+    /// Controls the front-to-back drawing and hit-testing order among siblings in a stack.
+    public func zIndex(_ value: Double) -> some View { ZIndexView(content: self, value: value) }
+
+    /// Sets the relative priority by which a stack allocates space to this view.
+    public func layoutPriority(_ value: Double) -> some View { LayoutPriorityView(content: self, value: value) }
+
+    /// Attaches a context menu opened by secondary / right-click on this view.
+    public func contextMenu<MenuContent: View>(@ViewBuilder menuItems: @escaping @MainActor () -> MenuContent) -> some View {
+        ContextMenuView(content: self, menuItems: menuItems)
+    }
+
     /// Scales the opacity of this view (0...1). Animatable with `withAnimation` or `.animation(_:value:)`.
     public func opacity(_ value: Double) -> some View { OpacityView(content: self, opacity: value) }
 
@@ -387,4 +402,221 @@ struct IdentifierView<Content: View>: View, PrimitiveView {
 final class IdentifierNode: PassthroughNode {
     var id: String = ""
     override var accessibilityID: String? { id.isEmpty ? nil : id }
+}
+
+// MARK: Shape, clipShape, zIndex, layoutPriority, contextMenu
+
+/// A 2D shape that can provide a vector `Path` within a bounding rectangle.
+@MainActor @preconcurrency
+public protocol Shape: View {
+    func path(in rect: Rect) -> Path
+}
+
+extension Rectangle: Shape {
+    public func path(in rect: Rect) -> Path { Path(rect: rect) }
+}
+
+extension RoundedRectangle: Shape {
+    public func path(in rect: Rect) -> Path { Path(roundedRect: rect, cornerRadius: cornerRadius) }
+}
+
+extension Circle: Shape {
+    public func path(in rect: Rect) -> Path {
+        let side = min(rect.width, rect.height)
+        let box = Rect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+        return Path(ellipseIn: box)
+    }
+}
+
+extension Capsule: Shape {
+    public func path(in rect: Rect) -> Path {
+        Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height) / 2)
+    }
+}
+
+extension Path: Shape {
+    public func path(in rect: Rect) -> Path {
+        applying(.translation(x: rect.minX, y: rect.minY))
+    }
+}
+
+private func roundedRectContains(_ rect: Rect, cornerRadius: Double, point: Point) -> Bool {
+    guard rect.contains(point) else { return false }
+    let r = min(max(0, cornerRadius), min(rect.width, rect.height) * 0.5)
+    if r <= 0 { return true }
+    let innerMinX = rect.minX + r, innerMaxX = rect.maxX - r
+    let innerMinY = rect.minY + r, innerMaxY = rect.maxY - r
+    let cx: Double
+    if point.x < innerMinX { cx = innerMinX }
+    else if point.x > innerMaxX { cx = innerMaxX }
+    else { return true }
+    let cy: Double
+    if point.y < innerMinY { cy = innerMinY }
+    else if point.y > innerMaxY { cy = innerMaxY }
+    else { return true }
+    let dx = point.x - cx, dy = point.y - cy
+    return dx * dx + dy * dy <= r * r
+}
+
+private func pathContains(_ path: Path, point: Point) -> Bool {
+    let contours = path.flattened(tolerance: 0.5)
+    var winding = 0
+    for poly in contours where poly.count >= 3 {
+        let count = poly.count
+        for i in 0..<count {
+            let a = poly[i]
+            let b = poly[(i + 1) % count]
+            if a.y <= point.y {
+                if b.y > point.y {
+                    let cross = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y)
+                    if cross > 0 { winding += 1 }
+                }
+            } else if b.y <= point.y {
+                let cross = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y)
+                if cross < 0 { winding -= 1 }
+            }
+        }
+    }
+    return winding != 0
+}
+
+struct ClipShapeView<Content: View, S: Shape>: View, PrimitiveView {
+    let content: Content
+    let shape: S
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ClipShapeNode) ?? ClipShapeNode()
+        let shape = shape
+        n.clipRect = { rect in
+            let bounds = shape.path(in: rect).controlBounds
+            return bounds.isEmpty ? rect : bounds.intersection(rect)
+        }
+        n.containsPoint = { point, rect in
+            guard rect.contains(point) else { return false }
+            if shape is Rectangle { return true }
+            if shape is Circle {
+                let side = min(rect.width, rect.height)
+                guard side > 0 else { return false }
+                let r = side * 0.5
+                let dx = point.x - rect.midX, dy = point.y - rect.midY
+                return dx * dx + dy * dy <= r * r
+            }
+            if let rr = shape as? RoundedRectangle {
+                return roundedRectContains(rect, cornerRadius: rr.cornerRadius, point: point)
+            }
+            if shape is Capsule {
+                return roundedRectContains(rect, cornerRadius: min(rect.width, rect.height) * 0.5, point: point)
+            }
+            return pathContains(shape.path(in: rect), point: point)
+        }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class ClipShapeNode: Node {
+    var clipRect: (@MainActor (Rect) -> Rect)?
+    var containsPoint: (@MainActor (Point, Rect) -> Bool)?
+
+    override var clipsContent: Bool { true }
+    override var isElement: Bool { false }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+    override func draw(_ list: inout DisplayList) {
+        let rect = clipRect?(frame) ?? frame
+        list.clipped(to: rect) { c in children[0].draw(&c) }
+    }
+    override func hitTest(_ p: Point) -> Node? {
+        guard containsPoint?(p, frame) ?? frame.contains(p) else { return nil }
+        return children[0].hitTest(p)
+    }
+}
+
+struct ZIndexView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let value: Double
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ZIndexNode) ?? ZIndexNode()
+        n.zIndexValue = value
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class ZIndexNode: Node {
+    var zIndexValue: Double = 0
+    override var zIndex: Double { zIndexValue }
+    override var layoutPriority: Double { children.first?.layoutPriority ?? 0 }
+    override var isElement: Bool { false }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+    override func draw(_ list: inout DisplayList) { children[0].draw(&list) }
+    override func hitTest(_ p: Point) -> Node? { children[0].hitTest(p) }
+}
+
+struct LayoutPriorityView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let value: Double
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? LayoutPriorityNode) ?? LayoutPriorityNode()
+        n.priorityValue = value
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class LayoutPriorityNode: Node {
+    var priorityValue: Double = 0
+    override var layoutPriority: Double { priorityValue }
+    override var zIndex: Double { children.first?.zIndex ?? 0 }
+    override var isElement: Bool { false }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+    override func draw(_ list: inout DisplayList) { children[0].draw(&list) }
+    override func hitTest(_ p: Point) -> Node? { children[0].hitTest(p) }
+}
+
+struct ContextMenuSurface<MenuContent: View>: View, PrimitiveView {
+    let menuContent: MenuContent
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ContextMenuContainerNode) ?? ContextMenuContainerNode()
+        let content = VStack(alignment: .leading, spacing: 2) {
+            menuContent
+        }
+        .padding(4)
+        .background(Color(white: 0.12, opacity: 0.96))
+        .border(Color(white: 1, opacity: 0.18), width: 1)
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class ContextMenuContainerNode: Node {
+    override var role: String { "ContextMenu" }
+    override var isHitTarget: Bool { true }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+}
+
+struct ContextMenuView<Content: View, MenuContent: View>: View, PrimitiveView {
+    let content: Content
+    let menuItems: @MainActor () -> MenuContent
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ContextMenuNode) ?? ContextMenuNode()
+        let builder = menuItems
+        n.makeMenu = { existingMenu, ctx in
+            reconcile(ContextMenuSurface(menuContent: builder()), existingMenu, ctx)
+        }
+        n.capturedEnvironment = c.environment
+        n.isEnabled = c.environment.isEnabled
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class ContextMenuNode: PassthroughNode {
+    var makeMenu: (@MainActor (Node?, ResolveContext) -> Node)?
+    var capturedEnvironment = EnvironmentValues()
+    var isEnabled: Bool = true
 }
