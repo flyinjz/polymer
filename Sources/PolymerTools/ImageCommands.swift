@@ -36,6 +36,11 @@ func screenTree(_ name: String, scale: Double, steps: [(option: String, value: S
                 print("--click \"\(step.value)\": no visible, clickable text reads exactly that. `polymer tree \(name)` lists the texts on the screen; scroll first if it is outside its scroll view.")
                 Platform.process.exit(1)
             }
+        } else if step.option == "--click-id" {
+            if !tree.click(id: step.value) {
+                print("--click-id \"\(step.value)\": no element has accessibilityIdentifier \"\(step.value)\". `polymer tree \(name)` lists #ids on the screen.")
+                Platform.process.exit(1)
+            }
         } else if step.option == "--hover" || step.option == "--press" {
             guard let p = tree.point(ofText: step.value) else {
                 print("\(step.option) \"\(step.value)\": no visible text reads exactly that. `polymer tree \(name)` lists the texts on the screen.")

@@ -31,6 +31,30 @@ extension View {
 
     /// Hides whatever the view draws outside its frame.
     public func clipped() -> some View { ClipView(content: self) }
+
+    /// Scales the opacity of this view (0...1). Animatable with `withAnimation` or `.animation(_:value:)`.
+    public func opacity(_ value: Double) -> some View { OpacityView(content: self, opacity: value) }
+
+    /// Shifts where this view draws and hit-tests without changing its layout frame.
+    /// Animatable with `withAnimation` or `.animation(_:value:)`.
+    public func offset(x: Double = 0, y: Double = 0) -> some View { OffsetView(content: self, offset: Point(x: x, y: y)) }
+    public func offset(_ offset: Point) -> some View { OffsetView(content: self, offset: offset) }
+
+    /// Constrains this view's dimensions to `aspectRatio` (width / height), fitting or filling the proposal.
+    /// When `aspectRatio` is nil, preserves the child's own ideal aspect ratio.
+    public func aspectRatio(_ aspectRatio: Double? = nil, contentMode: ContentMode) -> some View {
+        AspectRatioView(content: self, ratio: aspectRatio, mode: contentMode)
+    }
+
+    /// Runs `action(oldValue, newValue)` whenever `value` changes (and once on first appearance when `initial` is true).
+    public func onChange<V: Equatable>(of value: V, initial: Bool = false, _ action: @escaping @MainActor (V, V) -> Void) -> some View {
+        OnChangeView(content: self, value: value, initial: initial, action: action)
+    }
+
+    /// Gives the view a stable name shown in the element tree (`#id`) and usable by headless input and Customize.
+    public func accessibilityIdentifier(_ id: String) -> some View {
+        IdentifierView(content: self, id: id)
+    }
 }
 
 struct PaddingView<Content: View>: View, PrimitiveView {
@@ -149,9 +173,9 @@ final class LayerNode: Node {
         return front.hitTest(p) ?? back.hitTest(p)
     }
     /// Listed in drawing order, back to front, at the same depth: a background before its content, an overlay after.
-    override func dump(into out: inout String, depth: Int, focused: Node? = nil, markFocus: Bool = false) {
-        children[behind ? 1 : 0].dump(into: &out, depth: depth, focused: focused, markFocus: behind ? false : markFocus)
-        children[behind ? 0 : 1].dump(into: &out, depth: depth, focused: focused, markFocus: behind ? markFocus : false)
+    override func dump(into out: inout String, depth: Int, focused: Node? = nil, markFocus: Bool = false, pendingID: String? = nil) {
+        children[behind ? 1 : 0].dump(into: &out, depth: depth, focused: focused, markFocus: behind ? false : markFocus, pendingID: behind ? nil : pendingID)
+        children[behind ? 0 : 1].dump(into: &out, depth: depth, focused: focused, markFocus: behind ? markFocus : false, pendingID: behind ? pendingID : nil)
     }
 }
 
@@ -196,4 +220,171 @@ final class ClipNode: Node {
         list.clipped(to: frame) { c in children[0].draw(&c) }
     }
     override func hitTest(_ p: Point) -> Node? { frame.contains(p) ? children[0].hitTest(p) : nil }
+}
+
+// MARK: Opacity, Offset, AspectRatio, OnChange, Identifier
+
+struct OpacityView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let opacity: Double
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let clamped = min(max(opacity, 0), 1)
+        let n: OpacityNode
+        if let e = existing as? OpacityNode {
+            n = e
+            if n.animated.set(clamped, animation: c.animation) { c.tree.registerAnimatable(n) }
+        } else {
+            n = OpacityNode(opacity: clamped)
+        }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class OpacityNode: Node, AnimatableTicking {
+    var animated: AnimatedDouble
+    init(opacity: Double) { animated = AnimatedDouble(opacity); super.init() }
+    override var isElement: Bool { false }
+    var isAnimating: Bool { animated.isActive }
+    func tick(_ dt: Double) -> Bool { animated.step(dt) }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+    override func draw(_ list: inout DisplayList) {
+        list.withOpacity(animated.current) { c in children[0].draw(&c) }
+    }
+}
+
+struct OffsetView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let offset: Point
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n: OffsetNode
+        if let e = existing as? OffsetNode {
+            n = e
+            if n.animated.set(offset, animation: c.animation) { c.tree.registerAnimatable(n) }
+        } else {
+            n = OffsetNode(offset: offset)
+        }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class OffsetNode: Node, AnimatableTicking {
+    var animated: AnimatedPoint
+    init(offset: Point) { animated = AnimatedPoint(offset); super.init() }
+    override var isElement: Bool { false }
+    var isAnimating: Bool { animated.isActive }
+    func tick(_ dt: Double) -> Bool { animated.step(dt) }
+    override var contentShift: Point { animated.current }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
+    override func placeChildren(in r: Rect) { children[0].place(r) }
+    override func draw(_ list: inout DisplayList) {
+        let shift = animated.current
+        if shift == .zero { children[0].draw(&list); return }
+        list.translated(by: shift) { c in children[0].draw(&c) }
+    }
+    override func hitTest(_ p: Point) -> Node? {
+        let shift = animated.current
+        return children[0].hitTest(Point(x: p.x - shift.x, y: p.y - shift.y))
+    }
+}
+
+struct AspectRatioView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let ratio: Double?
+    let mode: ContentMode
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? AspectRatioNode) ?? AspectRatioNode()
+        n.ratio = ratio; n.mode = mode
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class AspectRatioNode: Node {
+    var ratio: Double?
+    var mode: ContentMode = .fit
+    override var isElement: Bool { false }
+
+    private func targetRatio() -> Double {
+        if let r = ratio, r > 0 { return r }
+        let ideal = children[0].measure(.unspecified)
+        return ideal.height > 0 ? ideal.width / ideal.height : 1
+    }
+
+    private func fittedSize(_ p: ProposedViewSize) -> Size {
+        let r = targetRatio()
+        switch (p.width, p.height) {
+        case (let w?, let h?):
+            let byW = Size(width: w, height: w / r)
+            let byH = Size(width: h * r, height: h)
+            switch mode {
+            case .fit: return byW.height <= h ? byW : byH
+            case .fill: return byW.height >= h ? byW : byH
+            }
+        case (let w?, nil):
+            return Size(width: w, height: w / r)
+        case (nil, let h?):
+            return Size(width: h * r, height: h)
+        case (nil, nil):
+            return children[0].measure(.unspecified)
+        }
+    }
+
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size {
+        let s = fittedSize(p)
+        return children[0].measure(ProposedViewSize(s))
+    }
+
+    override func placeChildren(in r: Rect) {
+        let s = children[0].measure(ProposedViewSize(r.size))
+        children[0].place(Rect(origin: Alignment.center.origin(of: s, in: r), size: s))
+    }
+}
+
+struct OnChangeView<Content: View, V: Equatable>: View, PrimitiveView {
+    let content: Content
+    let value: V
+    let initial: Bool
+    let action: @MainActor (V, V) -> Void
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? OnChangeNode<V>) ?? OnChangeNode<V>()
+        let act = action
+        let newVal = value
+        if let oldVal = n.lastValue {
+            if oldVal != newVal {
+                n.lastValue = newVal
+                c.tree.pendingCallbacks.append { act(oldVal, newVal) }
+            }
+        } else {
+            n.lastValue = newVal
+            if initial {
+                c.tree.pendingCallbacks.append { act(newVal, newVal) }
+            }
+        }
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class OnChangeNode<V: Equatable>: PassthroughNode {
+    var lastValue: V?
+}
+
+struct IdentifierView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let id: String
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? IdentifierNode) ?? IdentifierNode()
+        n.id = id
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class IdentifierNode: PassthroughNode {
+    var id: String = ""
+    override var accessibilityID: String? { id.isEmpty ? nil : id }
 }

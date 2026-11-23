@@ -61,6 +61,8 @@ struct ResolveContext {
     var depth = 0
     /// True when the view is an item of a lazy stack: a `ForEach` here builds its elements only when they come into view.
     var lazyItems = false
+    /// Active animation for this update pass (from `withAnimation` or `.animation(_:value:)`).
+    var animation: Animation? = nil
 }
 
 public enum Axis: Sendable { case horizontal, vertical }

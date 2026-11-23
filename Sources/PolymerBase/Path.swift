@@ -24,6 +24,41 @@ public struct Path: Hashable, Sendable {
                     .line(Point(x: r.minX, y: r.maxY)), .close]
     }
 
+    public init(roundedRect rect: Rect, cornerRadius: Double) {
+        let r = min(max(0, cornerRadius), min(rect.width, rect.height) / 2)
+        if r <= 0 { self.init(rect: rect); return }
+        // Cubic Bézier approximation to a quarter circle: 4/3 * (sqrt(2) - 1).
+        let k = r * 0.5522847498307936
+        let x0 = rect.minX, y0 = rect.minY, x1 = rect.maxX, y1 = rect.maxY
+        self.init([
+            .move(Point(x: x0 + r, y: y0)),
+            .line(Point(x: x1 - r, y: y0)),
+            .cubic(Point(x: x1 - r + k, y: y0), Point(x: x1, y: y0 + r - k), Point(x: x1, y: y0 + r)),
+            .line(Point(x: x1, y: y1 - r)),
+            .cubic(Point(x: x1, y: y1 - r + k), Point(x: x1 - r + k, y: y1), Point(x: x1 - r, y: y1)),
+            .line(Point(x: x0 + r, y: y1)),
+            .cubic(Point(x: x0 + r - k, y: y1), Point(x: x0, y: y1 - r + k), Point(x: x0, y: y1 - r)),
+            .line(Point(x: x0, y: y0 + r)),
+            .cubic(Point(x: x0, y: y0 + r - k), Point(x: x0 + r - k, y: y0), Point(x: x0 + r, y: y0)),
+            .close,
+        ])
+    }
+
+    public init(ellipseIn rect: Rect) {
+        guard !rect.isEmpty else { return }
+        let rx = rect.width / 2, ry = rect.height / 2
+        let cx = rect.midX, cy = rect.midY
+        let kx = rx * 0.5522847498307936, ky = ry * 0.5522847498307936
+        elements = [
+            .move(Point(x: cx, y: rect.minY)),
+            .cubic(Point(x: cx + kx, y: rect.minY), Point(x: rect.maxX, y: cy - ky), Point(x: rect.maxX, y: cy)),
+            .cubic(Point(x: rect.maxX, y: cy + ky), Point(x: cx + kx, y: rect.maxY), Point(x: cx, y: rect.maxY)),
+            .cubic(Point(x: cx - kx, y: rect.maxY), Point(x: rect.minX, y: cy + ky), Point(x: rect.minX, y: cy)),
+            .cubic(Point(x: rect.minX, y: cy - ky), Point(x: cx - kx, y: rect.minY), Point(x: cx, y: rect.minY)),
+            .close,
+        ]
+    }
+
     public var isEmpty: Bool { elements.isEmpty }
 
     /// Bounds of all points, control points included (cheap and conservative).

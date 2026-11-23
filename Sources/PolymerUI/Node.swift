@@ -135,8 +135,30 @@ class Node {
     var isElement: Bool { true }
     /// Text shown after the role in the element tree.
     var detail: String { "" }
+    /// Explicit identifier set with `.accessibilityIdentifier(_:)`, if any.
+    var accessibilityID: String? { nil }
     /// The node's own area in layout coordinates.
     var elementFrame: Rect { frame }
+
+    /// Deterministic structural path from the root to this node (using explicit
+    /// identifiers where present, otherwise role and sibling index).
+    final var stablePath: String {
+        var steps: [String] = []
+        var cur: Node? = self
+        while let n = cur {
+            if let id = n.accessibilityID {
+                steps.append("#\(id)")
+            } else if n.isElement {
+                let idx = n.parent?.children.firstIndex(where: { $0 === n }) ?? 0
+                steps.append("\(n.role)[\(idx)]")
+            }
+            cur = n.parent
+        }
+        return steps.reversed().joined(separator: "/")
+    }
+
+    /// Deterministic 64-bit ID derived from `stablePath` (identical across runs and OSes).
+    final var stableID: StableID { StableID(stablePath) }
 
     /// How far this node draws its content from where the content's frames say (a scroll view's offset).
     var contentShift: Point { .zero }
@@ -151,21 +173,23 @@ class Node {
 
     /// Writes the element tree. The focused node, or the first element
     /// inside it when it is not an element itself, is marked "focused".
-    func dump(into out: inout String, depth: Int, focused: Node? = nil, markFocus: Bool = false) {
+    func dump(into out: inout String, depth: Int, focused: Node? = nil, markFocus: Bool = false, pendingID: String? = nil) {
         var depth = depth
         var mark = markFocus || (focused != nil && focused === self)
+        var idToShow = pendingID ?? accessibilityID
         if isElement {
             let f = screenFrame
             func n(_ v: Double) -> String { v == v.rounded() ? String(Int(v)) : String(v) }
             out += String(repeating: "  ", count: depth)
             out += "\(role) (\(n(f.minX)), \(n(f.minY)), \(n(f.width))x\(n(f.height)))"
+            if let id = idToShow { out += " #\(id)"; idToShow = nil }
             let d = detail
             if !d.isEmpty { out += " \(d)" }
             if mark { out += " focused"; mark = false }
             out += "\n"
             depth += 1
         }
-        for c in children { c.dump(into: &out, depth: depth, focused: focused, markFocus: mark); mark = false }
+        for c in children { c.dump(into: &out, depth: depth, focused: focused, markFocus: mark, pendingID: idToShow); mark = false; idToShow = nil }
     }
 
     // MARK: Input

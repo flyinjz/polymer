@@ -248,7 +248,8 @@ extension TreeState {
         if !focusBindings.contains(where: { $0.node === b }) { focusBindings.append(WeakFocusBinding(node: b)) }
     }
 
-    /// Moves focus to `node` (nil clears it) and updates every `.focused` binding to match.
+    /// Moves focus to `node` (nil clears it), updates every `.focused` binding
+    /// to match, and scrolls enclosing scroll views so the focused view is visible.
     func setFocus(_ node: Node?) {
         focused = node
         pruneBindings()
@@ -256,6 +257,13 @@ extension TreeState {
         // Clear first, then set, so an optional shared by several views ends on the new one.
         for b in all where !b.contains(node) { b.set(false) }
         for b in all where b.contains(node) { b.set(true) }
+        if let node {
+            var n = node.parent
+            while let x = n {
+                if let s = x as? ScrollNode { s.scrollIntoView(node) }
+                n = x.parent
+            }
+        }
     }
 
     /// Brings focus in line with the `.focused` bindings after views changed

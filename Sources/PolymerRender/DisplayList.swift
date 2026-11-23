@@ -91,6 +91,8 @@ public struct DisplayList: Sendable {
     public private(set) var clip: PixelRect
     /// Added to every position recorded, in points.
     public private(set) var origin: Point = .zero
+    /// Multiplier applied to every colour and image recorded (0...1).
+    public private(set) var opacity: Double = 1.0
 
     public init(width: Int, height: Int, scale: Double = 1) {
         self.width = width; self.height = height; self.scale = scale
@@ -106,6 +108,7 @@ public struct DisplayList: Sendable {
         scrollHints.removeAll(keepingCapacity: true)
         clip = fullRect
         origin = .zero
+        opacity = 1.0
     }
 
     // MARK: Recording
@@ -125,6 +128,16 @@ public struct DisplayList: Sendable {
         origin = origin + offset
         body(&self)
         origin = saved
+    }
+
+    /// Runs `body` with the opacity of everything it records multiplied by `factor` (0...1).
+    public mutating func withOpacity(_ factor: Double, _ body: (inout DisplayList) -> Void) {
+        let clamped = min(max(factor, 0), 1)
+        guard clamped > 0 else { return }
+        let saved = opacity
+        opacity *= clamped
+        body(&self)
+        opacity = saved
     }
 
     /// Records a scroll viewport: clips to `rect`, translates by `-offset`,
@@ -153,32 +166,36 @@ public struct DisplayList: Sendable {
 
     /// Fills a rectangle given in points.
     public mutating func fill(_ rect: Rect, _ color: Color) {
-        guard color.opacity > 0 else { return }
-        add(.rect(rect, color), PixelRect.covering(rect, origin: origin, scale: scale))
+        let c = opacity < 1 ? color.opacity(opacity) : color
+        guard c.opacity > 0 else { return }
+        add(.rect(rect, c), PixelRect.covering(rect, origin: origin, scale: scale))
     }
 
     /// Fills a path given in points.
     public mutating func fill(_ path: Path, _ color: Color) {
-        guard color.opacity > 0, !path.isEmpty else { return }
-        add(.path(path, color), PixelRect.covering(path.controlBounds, origin: origin, scale: scale).outset(by: 1))
+        let c = opacity < 1 ? color.opacity(opacity) : color
+        guard c.opacity > 0, !path.isEmpty else { return }
+        add(.path(path, c), PixelRect.covering(path.controlBounds, origin: origin, scale: scale).outset(by: 1))
     }
 
     /// Records an image drawn into `rect` (points).
-    public mutating func drawImage(_ image: RenderImage, in rect: Rect, opacity: Double = 1, filter: ImageFilter = .bilinear) {
-        guard opacity > 0, image.width > 0, image.height > 0, !rect.isEmpty else { return }
-        add(.image(image, rect, min(max(opacity, 0), 1), filter), PixelRect.covering(rect, origin: origin, scale: scale))
+    public mutating func drawImage(_ image: RenderImage, in rect: Rect, opacity imageOpacity: Double = 1, filter: ImageFilter = .bilinear) {
+        let effective = min(max(imageOpacity, 0), 1) * opacity
+        guard effective > 0, image.width > 0, image.height > 0, !rect.isEmpty else { return }
+        add(.image(image, rect, effective, filter), PixelRect.covering(rect, origin: origin, scale: scale))
     }
 
     /// Records a backdrop blur over `rect` (points) with standard deviation `radius` points.
     public mutating func backdropBlur(_ rect: Rect, radius: Double) {
-        guard radius > 0, !rect.isEmpty else { return }
+        guard radius > 0, opacity > 0, !rect.isEmpty else { return }
         add(.backdropBlur(rect, radius), PixelRect.covering(rect, origin: origin, scale: scale))
     }
 
     /// Records laid-out glyphs with the line's baseline-left at `position` (points).
     public mutating func drawGlyphs(_ glyphs: [PositionedGlyph], font: FontFace, size: Double, at position: Point,
                                     color: Color, options: TextRenderingOptions = .standard) {
-        guard color.opacity > 0, let first = glyphs.first, let last = glyphs.last else { return }
+        let c = opacity < 1 ? color.opacity(opacity) : color
+        guard c.opacity > 0, let first = glyphs.first, let last = glyphs.last else { return }
         // Every glyph lies inside the font's glyph box at its position; 2 pixels
         // more cover stem darkening and coverage at the box's edge.
         // A font without a glyph box gets a generous one.
@@ -190,7 +207,7 @@ public struct DisplayList: Sendable {
         let minX = min(first.x, last.x), maxX = max(first.x, last.x)   // positions run in order along the line
         let box = Rect(x: position.x + minX + left, y: position.y - ascent,
                        width: maxX - minX + right - left, height: ascent + descent)
-        let run = GlyphRun(glyphs: glyphs, font: font, size: size, position: position, color: color, options: options)
+        let run = GlyphRun(glyphs: glyphs, font: font, size: size, position: position, color: c, options: options)
         add(.glyphs(run), PixelRect.covering(box, origin: origin, scale: scale).outset(by: 2))
     }
 

@@ -85,19 +85,34 @@ public final class ViewTree {
         var rounds = 0
         while true {
             let pending = state.queue.drain()
-            if pending.isEmpty { break }
+            if pending.isEmpty {
+                // Drain deferred callbacks (e.g. .onChange); if they mutate state, loop again.
+                if state.pendingCallbacks.isEmpty { break }
+                let callbacks = state.pendingCallbacks
+                state.pendingCallbacks.removeAll(keepingCapacity: true)
+                for cb in callbacks { cb() }
+                continue
+            }
             rounds += 1
             if rounds > 64 {
                 Logger("PolymerUI").error("A view changes state every time its body runs, so the tree never settles. Change state in actions (button handlers, callbacks), not in body.")
                 break
             }
             var hosts: [any ViewHost] = []
-            for p in pending {
-                if let h = p.host, !h.isDirty { h.isDirty = true; hosts.append(h) }
+            for (inv, anim) in pending {
+                if let h = inv.host {
+                    if let anim { h.pendingAnimation = anim }
+                    if !h.isDirty { h.isDirty = true; hosts.append(h) }
+                }
             }
             // Outer views first: evaluating one brings the views inside it up to date too.
             hosts.sort { $0.depth < $1.depth }
             for h in hosts where h.isDirty { h.reevaluate(); changed = true }
+            if !state.pendingCallbacks.isEmpty {
+                let callbacks = state.pendingCallbacks
+                state.pendingCallbacks.removeAll(keepingCapacity: true)
+                for cb in callbacks { cb() }
+            }
         }
         if changed || needsLayout || state.layoutRequested { layout() }
         return changed
@@ -308,6 +323,74 @@ public final class ViewTree {
         return true
     }
 
+    /// True while any animation or scroll fling is in progress (a window uses
+    /// this to keep requesting display-paced frames and sleep when idle).
+    public var hasActiveAnimations: Bool {
+        state.animatables.contains { $0.node.map { $0.isMounted && $0.isAnimating } ?? false }
+    }
+
+    /// Advances active animations and inertial scroll flings by `dt` seconds.
+    /// Returns true while any animation or fling remains active.
+    @discardableResult
+    public func tick(_ dt: Double) -> Bool {
+        update()
+        guard dt > 0 else { return hasActiveAnimations }
+        state.animatables.removeAll { $0.node.map { !$0.isMounted || !$0.isAnimating } ?? true }
+        var anyActive = false
+        var hoverNeedsRefresh = false
+        for w in state.animatables {
+            guard let a = w.node, a.isMounted else { continue }
+            if a.tick(dt) { anyActive = true }
+            if a is ScrollNode { hoverNeedsRefresh = true }
+        }
+        state.animatables.removeAll { $0.node.map { !$0.isMounted || !$0.isAnimating } ?? true }
+        if hoverNeedsRefresh, pointer != nil, !state.hoverNodes.isEmpty {
+            update()
+            state.updateHover(pointer)
+        }
+        return anyActive || hasActiveAnimations
+    }
+
+    /// Starts inertial scrolling on the scroll view under `point` with initial
+    /// velocity `(vx, vy)` points/second. Step with `tick(_:)`.
+    @discardableResult
+    public func fling(at point: Point, vx: Double = 0, vy: Double, physics: ScrollPhysics = .standard) -> Bool {
+        update()
+        var n = root?.hitTest(point)
+        while let node = n {
+            if let s = node as? ScrollNode {
+                s.startFling(vx: vx, vy: vy, physics: physics)
+                if s.isAnimating {
+                    state.registerAnimatable(s)
+                    return true
+                }
+            }
+            n = node.parent
+        }
+        return false
+    }
+
+    /// Clicks the middle of the first element with `.accessibilityIdentifier(id)`.
+    @discardableResult
+    public func click(id: String) -> Bool {
+        guard let p = point(ofID: id) else { return false }
+        return click(at: p)
+    }
+
+    /// The middle of the first element with `.accessibilityIdentifier(id)`, in screen points.
+    public func point(ofID id: String) -> Point? {
+        update()
+        guard let node = root?.first(where: { $0.accessibilityID == id }) else { return nil }
+        let f = node.screenFrame
+        return Point(x: f.midX, y: f.midY)
+    }
+
+    /// The deterministic structural path of the first element with `.accessibilityIdentifier(id)`.
+    public func stablePath(ofID id: String) -> String? {
+        update()
+        return root?.first(where: { $0.accessibilityID == id })?.stablePath
+    }
+
     /// Clicks the middle of the first text that reads exactly `text`.
     /// Returns false when there is no such text or nothing handles the click.
     @discardableResult
@@ -334,10 +417,13 @@ public final class ViewTree {
         update()
         var n = root?.hitTest(point)
         while let node = n {
-            if let s = node as? ScrollNode, s.scroll(dx: dx, dy: dy) {
-                // Content moved under the pointer.
-                if pointer != nil, !state.hoverNodes.isEmpty { update(); state.updateHover(pointer) }
-                return true
+            if let s = node as? ScrollNode {
+                s.stopFling()
+                if s.scroll(dx: dx, dy: dy) {
+                    // Content moved under the pointer.
+                    if pointer != nil, !state.hoverNodes.isEmpty { update(); state.updateHover(pointer) }
+                    return true
+                }
             }
             n = node.parent
         }

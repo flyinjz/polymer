@@ -171,3 +171,171 @@ final class DividerNode: Node {
     }
     override func draw(_ list: inout DisplayList) { if list.isVisible(frame) { list.fill(frame, color) } }
 }
+
+// MARK: Images
+
+/// How a view scales to fit a proposed size (SwiftUI's `ContentMode`).
+public enum ContentMode: Hashable, Sendable { case fit, fill }
+
+/// A raster image view (SwiftUI's `Image`). Draws at its own pixel size in
+/// points unless `.resizable()` is called.
+public struct Image: View, PrimitiveView {
+    let image: RenderImage
+    var isResizable = false
+    var filter: ImageFilter = .bilinear
+
+    public init(_ image: RenderImage) { self.image = image }
+    public init(_ bitmap: Bitmap) { self.image = RenderImage(bitmap) }
+
+    public func resizable() -> Image {
+        var copy = self; copy.isResizable = true; return copy
+    }
+
+    public func interpolation(_ filter: ImageFilter) -> Image {
+        var copy = self; copy.filter = filter; return copy
+    }
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ImageNode) ?? ImageNode()
+        n.image = image; n.isResizable = isResizable; n.filter = filter
+        return n
+    }
+}
+
+final class ImageNode: Node {
+    var image: RenderImage?
+    var isResizable = false
+    var filter: ImageFilter = .bilinear
+
+    override var role: String { "Image" }
+    override var detail: String {
+        guard let image else { return "" }
+        return "\(image.width)x\(image.height)"
+    }
+    override var isHitTarget: Bool { image != nil }
+
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size {
+        guard let image else { return .zero }
+        if !isResizable { return image.size }
+        return p.replacingUnspecified(image.size)
+    }
+
+    override func draw(_ list: inout DisplayList) {
+        guard let image, list.isVisible(frame) else { return }
+        list.drawImage(image, in: frame, opacity: 1, filter: filter)
+    }
+}
+
+// MARK: Shapes and dark glass
+
+/// A rectangle with rounded corners filled with the foreground colour.
+public struct RoundedRectangle: View, PrimitiveView {
+    let cornerRadius: Double
+    public init(cornerRadius: Double) { self.cornerRadius = cornerRadius }
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ShapeNode) ?? ShapeNode()
+        n.kind = .roundedRect(cornerRadius)
+        n.color = c.environment.foregroundColor
+        return n
+    }
+}
+
+/// A circle fitting the smaller side of the offered size, filled with the foreground colour.
+public struct Circle: View, PrimitiveView {
+    public init() {}
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ShapeNode) ?? ShapeNode()
+        n.kind = .circle
+        n.color = c.environment.foregroundColor
+        return n
+    }
+}
+
+/// A pill shape (corner radius half the shorter side), filled with the foreground colour.
+public struct Capsule: View, PrimitiveView {
+    public init() {}
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ShapeNode) ?? ShapeNode()
+        n.kind = .capsule
+        n.color = c.environment.foregroundColor
+        return n
+    }
+}
+
+extension Path: View, PrimitiveView {
+    public var body: Never { fatalError("Path is a built-in view") }
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? ShapeNode) ?? ShapeNode()
+        n.kind = .path(self)
+        n.color = c.environment.foregroundColor
+        return n
+    }
+}
+
+final class ShapeNode: Node {
+    enum Kind { case roundedRect(Double), circle, capsule, path(Path) }
+    var kind: Kind = .circle
+    var color: Color = .clear
+
+    override var role: String {
+        switch kind {
+        case .roundedRect: "RoundedRectangle"
+        case .circle: "Circle"
+        case .capsule: "Capsule"
+        case .path: "Path"
+        }
+    }
+    override var detail: String { color.description }
+    override var isHitTarget: Bool { color.opacity > 0 }
+
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size {
+        switch kind {
+        case .circle:
+            let w = p.width ?? 10, h = p.height ?? 10
+            let side = min(w, h)
+            return Size(width: side, height: side)
+        case .roundedRect, .capsule, .path:
+            return p.replacingUnspecified(Size(width: 10, height: 10))
+        }
+    }
+
+    override func draw(_ list: inout DisplayList) {
+        guard list.isVisible(frame) else { return }
+        switch kind {
+        case .roundedRect(let r):
+            list.fill(Path(roundedRect: frame, cornerRadius: r), color)
+        case .circle:
+            let side = min(frame.width, frame.height)
+            let rect = Rect(x: frame.midX - side / 2, y: frame.midY - side / 2, width: side, height: side)
+            list.fill(Path(ellipseIn: rect), color)
+        case .capsule:
+            list.fill(Path(roundedRect: frame, cornerRadius: min(frame.width, frame.height) / 2), color)
+        case .path(let p):
+            list.fill(p.applying(.translation(x: frame.minX, y: frame.minY)), color)
+        }
+    }
+}
+
+/// Blurs whatever was drawn behind it inside its frame (the building block of dark glass).
+public struct BackdropBlur: View, PrimitiveView {
+    let radius: Double
+    public init(radius: Double) { self.radius = radius }
+
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? BackdropBlurNode) ?? BackdropBlurNode()
+        n.radius = radius
+        return n
+    }
+}
+
+final class BackdropBlurNode: Node {
+    var radius: Double = 0
+    override var role: String { "BackdropBlur" }
+    override var detail: String { "r=\(radius)" }
+    override func sizeThatFits(_ p: ProposedViewSize) -> Size { p.replacingUnspecified(Size(width: 10, height: 10)) }
+    override func draw(_ list: inout DisplayList) {
+        guard radius > 0, list.isVisible(frame) else { return }
+        list.backdropBlur(frame, radius: radius)
+    }
+}

@@ -361,7 +361,9 @@ struct EnvRow: View, Equatable {
 /// Equatable and observes a model: runs again when what it read changes.
 struct ObservingRow: View, Equatable {
     let model: EquatableModel
-    nonisolated static func == (a: ObservingRow, b: ObservingRow) -> Bool { a.model === b.model }
+    nonisolated let modelID: ObjectIdentifier
+    init(model: EquatableModel) { self.model = model; self.modelID = ObjectIdentifier(model) }
+    nonisolated static func == (a: ObservingRow, b: ObservingRow) -> Bool { a.modelID == b.modelID }
     var body: some View { Text("Other \(model.other)") }
 }
 
@@ -384,6 +386,57 @@ struct EquatableScreen: View {
         }
         .font(model.font)
         .lineLimit(model.limit)
+    }
+}
+
+@Observable
+final class AnimModel {
+    var shown = false
+    var shifted = false
+    var tag = 0
+}
+
+struct AnimScreen: View {
+    let model: AnimModel
+    let font: Font
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .opacity(model.shown ? 1 : 0)
+            Rectangle()
+                .foregroundStyle(Color(red: 1, green: 0, blue: 0))
+                .frame(width: 10, height: 10)
+                .offset(x: model.shifted ? 40 : 0, y: 0)
+                .animation(.linear(duration: 0.4), value: model.shifted)
+        }
+        .font(font)
+        .frame(width: 80, height: 40, alignment: .topLeading)
+        .background(Color.black)
+    }
+}
+
+@Observable
+final class ChangeModel {
+    var count = 0
+    var log: [String] = []
+}
+
+struct ChangeScreen: View {
+    let model: ChangeModel
+    let font: Font
+    var body: some View {
+        VStack(alignment: .leading) {
+            Button("Inc") { model.count += 1 }
+                .accessibilityIdentifier("inc-button")
+            Text("Count \(model.count)")
+                .accessibilityIdentifier("count-label")
+        }
+        .onChange(of: model.count, initial: true) { old, new in
+            model.log.append("\(old)->\(new)")
+        }
+        .font(font)
     }
 }
 
@@ -891,7 +944,7 @@ struct EquatableScreen: View {
             guard let t = try sampleTree(name, root: c.root, scale: 2) else { c.fail("no \(name) screen"); continue }
             let firstImg = t.render(background: bg)
             let totalPixels = firstImg.width * firstImg.height
-            for dy in [40.0, 40, -25, 300, 7, -1000, 5000] {
+            for dy: Double in [40.0, 40, -25, 300, 7, -1000, 5000] {
                 _ = t.scroll(at: Point(x: 120, y: 120), dy: dy)
                 let img = t.render(background: bg)
                 if abs(dy) <= 40 {
@@ -903,5 +956,141 @@ struct EquatableScreen: View {
             _ = t.click(text: "Track 3")
             c.expect(t.render(background: bg) == drawnWhole(t), "\(name): partial frame after a click equals a whole draw")
         }
+    },
+    Check("ui.image-and-shapes") { c in
+        // 4x2 image (2:1 aspect ratio): red left, blue right.
+        var bmp = Bitmap(width: 4, height: 2)
+        for y in 0..<2 {
+            for x in 0..<4 {
+                let o = (y * 4 + x) * 4
+                bmp.pixels[o] = x < 2 ? 255 : 0
+                bmp.pixels[o + 2] = x >= 2 ? 255 : 0
+                bmp.pixels[o + 3] = 255
+            }
+        }
+        let img = RenderImage(bmp)
+        let view = VStack(alignment: .leading, spacing: 4) {
+            Image(img).resizable().interpolation(.nearest).aspectRatio(contentMode: .fit).frame(width: 20, height: 20)
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 4).foregroundStyle(.white).frame(width: 16, height: 16)
+                Circle().foregroundStyle(Color(red: 0, green: 1, blue: 0)).frame(width: 16, height: 16)
+                Capsule().foregroundStyle(Color(red: 0, green: 0, blue: 1)).frame(width: 24, height: 10)
+            }
+            Rectangle().foregroundStyle(Color(white: 0.08, opacity: 0.6))
+                .background(BackdropBlur(radius: 2))
+                .frame(width: 40, height: 12)
+        }
+        .background(Color.black)
+        let r = ImageRenderer(content: view)
+        let tree = r.elementTree
+        c.expect(tree.contains("Image (0, 5, 20x10) 4x2"), "aspectRatio(.fit) fits 4x2 into 20x20 as 20x10:\n\(tree)")
+        c.expect(tree.contains("RoundedRectangle") && tree.contains("Circle") && tree.contains("Capsule") && tree.contains("BackdropBlur"),
+                 "shapes and backdrop blur appear in element tree")
+        let out = r.bitmap
+        c.expectEqual(out[2, 10].r, 255, "left half of image is red")
+        c.expectEqual(out[18, 10].b, 255, "right half of image is blue")
+        // Corner of RoundedRectangle is anti-aliased (<255) while its centre is solid white.
+        c.expect(out[0, 24].r < 128 && out[8, 32].r == 255, "RoundedRectangle rounds corners")
+    },
+    Check("ui.modifiers") { c in
+        let font = Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)
+        // .accessibilityIdentifier, stablePath, click(id:), and .onChange.
+        let model = ChangeModel()
+        let tree = ViewTree(ChangeScreen(model: model, font: font))
+        let dump = tree.elementTree
+        c.expect(dump.contains("#inc-button") && dump.contains("#count-label"), "element tree shows #ids:\n\(dump)")
+        c.expectEqual(model.log, ["0->0"], "onChange(initial: true) runs once on first update")
+        c.expect(tree.click(id: "inc-button"), "click(id:) presses the button")
+        tree.update()
+        c.expectEqual(model.count, 1, "button ran")
+        c.expectEqual(model.log, ["0->0", "0->1"], "onChange fired with old and new values")
+        let path1 = tree.stablePath(ofID: "inc-button")
+        let path2 = ViewTree(ChangeScreen(model: ChangeModel(), font: font)).stablePath(ofID: "inc-button")
+        c.expect(path1 != nil && path1 == path2, "stablePath is deterministic across trees: \(path1 ?? "nil")")
+
+        // .offset shifts drawing and hit-testing without changing layout; .opacity scales drawn alpha.
+        var tapped = 0
+        let shifted = ViewTree(
+            ZStack(alignment: .topLeading) {
+                Button(action: { tapped += 1 }) {
+                    Rectangle().foregroundStyle(.white).frame(width: 20, height: 20)
+                }
+                .offset(x: 30, y: 10)
+                .opacity(0.5)
+            }
+            .frame(width: 80, height: 40, alignment: .topLeading)
+        )
+        let img = shifted.render(background: .black)
+        c.expectEqual(img[5, 5].r, 0, "original position is empty after offset")
+        c.expectEqual(img[35, 15].r, 128, "offset rectangle drawn at half opacity")
+        c.expect(!shifted.click(at: Point(x: 5, y: 5)), "clicking old position does not hit")
+        c.expect(shifted.click(at: Point(x: 35, y: 15)) && tapped == 1, "clicking shifted position hits button")
+    },
+    Check("ui.focus-scroll") { c in
+        // Focusing a row below the scroll viewport scrolls it into view automatically.
+        let tree = ViewTree(try sampleList(root: c.root))
+        tree.update()
+        // Tab through 15 buttons inside the 40-row ScrollView (viewport fits ~7 rows).
+        for _ in 0..<15 { _ = tree.key("tab") }
+        let focused = tree.focusedElement ?? ""
+        c.expect(focused.contains("\"Track 15\""), "focus reached Track 15: \(focused)")
+        c.expect(!tree.elementTree.contains("offset 0,0"), "scroll view moved to keep focused row in view")
+        if let p = tree.point(ofText: "Track 15") {
+            c.expect(p.y >= 0 && p.y <= 200, "Track 15 is inside the 200pt window (y=\(p.y))")
+        } else {
+            c.fail("Track 15 missing from tree")
+        }
+    },
+    Check("ui.animation") { c in
+        // Curve checks: endpoints, monotonic easeInOut, spring settling.
+        let linear = Animation.linear(duration: 0.4)
+        c.expectClose(linear.evaluate(at: 0.2).progress, 0.5, tolerance: 1e-6, "linear midpoint")
+        c.expect(linear.evaluate(at: 0.4).finished, "linear finishes at duration")
+        let delayed = Animation.easeInOut(duration: 0.2).delay(0.1)
+        c.expectEqual(delayed.evaluate(at: 0.05).progress, 0, "delay holds at 0")
+        c.expectClose(delayed.evaluate(at: 0.2).progress, 0.5, tolerance: 1e-4, "easeInOut midpoint")
+        c.expect(delayed.evaluate(at: 0.35).finished, "delayed finishes")
+        for damping in [0.6, 1.0, 1.4] {
+            let s = Animation.spring(response: 0.3, dampingFraction: damping)
+            c.expect(s.evaluate(at: 0.1).progress > 0, "spring (\(damping)) moves forward")
+            c.expect(s.evaluate(at: 5.0).finished, "spring (\(damping)) settles")
+        }
+
+        // withAnimation + .opacity and .animation(_:value:) + .offset run on tick(dt) with zero body evaluations.
+        let font = Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)
+        let model = AnimModel()
+        let tree = ViewTree(AnimScreen(model: model, font: font))
+        let startImg = tree.render(background: .black)
+        c.expectEqual(startImg[5, 5].r, 0, "starts invisible")
+        c.expectEqual(startImg[5, 25].r, 255, "red box starts at x=0")
+
+        withAnimation(.linear(duration: 0.4)) { model.shown = true }
+        model.shifted = true
+        tree.update()
+        c.expect(tree.hasActiveAnimations, "animations became active")
+        let evalsBeforeTick = tree.bodyEvaluations
+
+        c.expect(tree.tick(0.2), "halfway through 0.4s animation, still active")
+        c.expectEqual(tree.bodyEvaluations, evalsBeforeTick, "ticking animations evaluates zero view bodies")
+        let midImg = tree.render(background: .black)
+        c.expect(midImg[5, 5].r >= 125 && midImg[5, 5].r <= 130, "opacity is halfway (~128), got \(midImg[5, 5].r)")
+        c.expectEqual(midImg[25, 25].r, 255, "red box is halfway at x=20")
+
+        c.expect(!tree.tick(0.25), "animation finished and goes idle")
+        c.expect(!tree.hasActiveAnimations, "no active animations when settled")
+        let endImg = tree.render(background: .black)
+        c.expectEqual(endImg[5, 5].r, 255, "opacity settled at 1")
+        c.expectEqual(endImg[45, 25].r, 255, "red box settled at x=40")
+
+        // Inertial scroll fling via ScrollPhysics.
+        let list = ViewTree(try sampleList(root: c.root))
+        list.update()
+        c.expect(list.fling(at: Point(x: 120, y: 120), vy: 800), "fling starts")
+        c.expect(list.hasActiveAnimations, "fling keeps tree active")
+        var ticks = 0
+        while list.tick(1.0 / 60.0), ticks < 300 { ticks += 1 }
+        c.expect(ticks > 5 && ticks < 200, "fling decelerates and stops in \(ticks) frames")
+        c.expect(!list.hasActiveAnimations, "fling goes idle once stopped")
+        c.expect(!list.elementTree.contains("offset 0,0"), "fling moved scroll offset")
     },
 ]

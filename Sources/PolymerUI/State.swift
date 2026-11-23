@@ -141,23 +141,23 @@ public struct Environment<Value>: DynamicProperty, LinkedProperty, EnvironmentRe
 
 /// Views waiting to be evaluated again. Changes can be reported from any thread.
 final class InvalidationQueue: Sendable {
-    private let pending = Mutex<[(Invalidator, Int)]>([])
+    private let pending = Mutex<[(Invalidator, Int, Animation?)]>([])
     private let wake = Mutex<(@Sendable () -> Void)?>(nil)
 
-    func push(_ invalidator: Invalidator, _ generation: Int) {
-        pending.withLock { $0.append((invalidator, generation)) }
+    func push(_ invalidator: Invalidator, _ generation: Int, animation: Animation? = AnimationTransaction.current) {
+        pending.withLock { $0.append((invalidator, generation, animation)) }
         let w = wake.withLock { $0 }
         w?()
     }
 
     /// Takes everything queued; entries made stale by a later evaluation are dropped.
-    func drain() -> [Invalidator] {
-        let taken = pending.withLock { p -> [(Invalidator, Int)] in
+    func drain() -> [(Invalidator, Animation?)] {
+        let taken = pending.withLock { p -> [(Invalidator, Int, Animation?)] in
             let t = p
             p.removeAll(keepingCapacity: true)
             return t
         }
-        return taken.compactMap { $0.1 == $0.0.generation ? $0.0 : nil }
+        return taken.compactMap { $0.1 == $0.0.generation ? ($0.0, $0.2) : nil }
     }
 
     var isEmpty: Bool { pending.withLock { $0.isEmpty } }
@@ -209,6 +209,16 @@ final class TreeState {
     var focusBindings: [WeakFocusBinding] = []
     /// Views with `.onHover`.
     var hoverNodes: [WeakHoverNode] = []
+    /// Active animated nodes and scroll flings stepped by `ViewTree.tick(_:)`.
+    var animatables: [WeakAnimatable] = []
+    /// Deferred callbacks (such as `.onChange`) drained after each resolve pass.
+    var pendingCallbacks: [@MainActor () -> Void] = []
+
+    func registerAnimatable(_ node: any AnimatableTicking) {
+        if !animatables.contains(where: { $0.node === node }) {
+            animatables.append(WeakAnimatable(node: node))
+        }
+    }
 }
 
 // MARK: Hosts
@@ -217,6 +227,7 @@ final class TreeState {
 protocol ViewHost: AnyObject {
     var depth: Int { get }
     var isDirty: Bool { get set }
+    var pendingAnimation: Animation? { get set }
     /// Runs `body`, reporting what it reads as dependencies of this view.
     func track<T>(_ body: () -> T) -> T
     /// Evaluates the body again and updates the nodes below.
@@ -277,6 +288,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
     private var body: V.Body?
     private var mounted = true
     var isDirty = false
+    var pendingAnimation: Animation? = nil
     var depth: Int { context.depth }
 
     init(_ view: V, _ c: ResolveContext) {
@@ -324,6 +336,7 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         var inner = context
         inner.host = self
         inner.depth += 1
+        if let pendingAnimation { inner.animation = pendingAnimation }
         return inner
     }
 
@@ -335,6 +348,8 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
 
     private func evaluate() {
         isDirty = false
+        let anim = pendingAnimation
+        pendingAnimation = nil
         let generation = invalidator.begin()
         epoch.bump()
         if info.linked {
@@ -345,7 +360,9 @@ final class HostNode<V: View>: PassthroughNode, ViewHost {
         context.tree.bodyEvaluations += 1
         let body = track(generation) { view.body }
         if info.equatable { self.body = body }
-        setChild(0, body, innerContext)
+        var inner = innerContext
+        if let anim { inner.animation = anim }
+        setChild(0, body, inner)
     }
 
     func track<T>(_ body: () -> T) -> T { track(invalidator.generation, body) }

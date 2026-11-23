@@ -35,13 +35,71 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
     }
 }
 
-final class ScrollNode: Node {
+final class ScrollNode: Node, AnimatableTicking {
     var axes: Axis.Set = .vertical
     /// How far the content has moved up and left, in points; whole pixels.
     private(set) var offset: Point = .zero
     private(set) var contentSize: Size = .zero
     /// Lazy stacks inside, told when the visible area moves.
     private var lazyStacks: [WeakLazyStack] = []
+    /// Inertial fling state (points/second), stepped by `ViewTree.tick(_:)`.
+    private var velocity: Point = .zero
+    private var physics: ScrollPhysics = .standard
+    private var remainder: Point = .zero
+
+    var isAnimating: Bool { velocity != .zero }
+
+    func startFling(vx: Double, vy: Double, physics: ScrollPhysics) {
+        self.physics = physics
+        self.remainder = .zero
+        self.velocity = Point(x: axes.contains(.horizontal) ? vx : 0, y: axes.contains(.vertical) ? vy : 0)
+    }
+
+    func stopFling() { velocity = .zero; remainder = .zero }
+
+    func tick(_ dt: Double) -> Bool {
+        guard velocity != .zero else { return false }
+        let step = physics.step(vx: velocity.x, vy: velocity.y, dt: dt)
+        let wantX = remainder.x + step.dx, wantY = remainder.y + step.dy
+        let before = offset
+        let moved = scroll(dx: wantX, dy: wantY)
+        let actualDx = offset.x - before.x, actualDy = offset.y - before.y
+        // If we hit a scroll limit on an axis, stop velocity along that axis.
+        let vx = (abs(wantX) >= 1 / scale && actualDx == 0) ? 0 : step.vx
+        let vy = (abs(wantY) >= 1 / scale && actualDy == 0) ? 0 : step.vy
+        remainder = Point(x: vx == 0 ? 0 : wantX - actualDx, y: vy == 0 ? 0 : wantY - actualDy)
+        velocity = Point(x: vx, y: vy)
+        if !step.active || (vx == 0 && vy == 0) {
+            velocity = .zero; remainder = .zero
+            return false
+        }
+        return moved || velocity != .zero
+    }
+
+    /// Scrolls just enough to bring `target` (a descendant) into the viewport.
+    @discardableResult
+    func scrollIntoView(_ target: Node) -> Bool {
+        var shift = Point.zero
+        var n = target.parent
+        while let x = n, x !== self {
+            shift = shift + x.contentShift
+            n = x.parent
+        }
+        let r = target.elementFrame.offsetBy(dx: shift.x, dy: shift.y)
+        guard !r.isEmpty else { return false }
+        let vp = viewport
+        var dx = 0.0, dy = 0.0
+        if axes.contains(.horizontal) {
+            if r.minX < vp.minX { dx = r.minX - vp.minX }
+            else if r.maxX > vp.maxX { dx = r.maxX - vp.maxX }
+        }
+        if axes.contains(.vertical) {
+            if r.minY < vp.minY { dy = r.minY - vp.minY }
+            else if r.maxY > vp.maxY { dy = r.maxY - vp.maxY }
+        }
+        guard dx != 0 || dy != 0 else { return false }
+        return scroll(dx: dx, dy: dy)
+    }
 
     /// The area of the content in view, in the content's layout coordinates.
     var viewport: Rect { frame.offsetBy(dx: offset.x, dy: offset.y) }

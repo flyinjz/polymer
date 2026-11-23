@@ -58,7 +58,8 @@ public struct EnvironmentValues {
         guard font == other.font, foregroundColor == other.foregroundColor, separatorColor == other.separatorColor,
               textRendering == other.textRendering, displayScale == other.displayScale, lineLimit == other.lineLimit,
               multilineTextAlignment == other.multilineTextAlignment, isEnabled == other.isEnabled,
-              sameStyle(buttonStyle, other.buttonStyle), custom.count == other.custom.count else { return false }
+              sameStyle(buttonStyle, other.buttonStyle),
+              custom.count == other.custom.count else { return false }
         for (k, v) in custom {
             guard let o = other.custom[k], sameValue(v, o) else { return false }
         }
