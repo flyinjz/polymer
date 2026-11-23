@@ -885,13 +885,19 @@ struct EquatableScreen: View {
         _ = tree.render(background: .black)
         c.expectEqual(area(tree.damage), whole, "a new background draws everything")
 
-        // Scrolling, plain and lazy: every frame equals a whole draw.
+        // Scrolling, plain and lazy: small steps use scroll blits (redrawing far less than the viewport)
+        // and every frame equals a whole draw.
         for name in ["list", "library"] {
             guard let t = try sampleTree(name, root: c.root, scale: 2) else { c.fail("no \(name) screen"); continue }
-            _ = t.render(background: bg)
+            let firstImg = t.render(background: bg)
+            let totalPixels = firstImg.width * firstImg.height
             for dy in [40.0, 40, -25, 300, 7, -1000, 5000] {
                 _ = t.scroll(at: Point(x: 120, y: 120), dy: dy)
                 let img = t.render(background: bg)
+                if abs(dy) <= 40 {
+                    c.expect(!t.scrollBlits.isEmpty, "\(name): small scroll (\(dy)) uses scroll blit")
+                    c.expect(area(t.damage) * 2 < totalPixels, "\(name): scroll (\(dy)) redraws less than half the screen (drew \(area(t.damage)) of \(totalPixels))")
+                }
                 c.expect(img == drawnWhole(t), "\(name): partial frame after scrolling \(dy) equals a whole draw")
             }
             _ = t.click(text: "Track 3")

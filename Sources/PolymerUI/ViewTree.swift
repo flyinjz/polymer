@@ -27,6 +27,8 @@ public final class ViewTree {
     /// time (or after a size or background change), then only what changed
     /// since the frame before; empty when nothing did.
     public private(set) var damage: [PixelRect] = []
+    /// In-place pixel copies the last `render()` used for scrolled viewports.
+    public private(set) var scrollBlits: [ScrollBlit] = []
     /// What the last `render()` drew, in drawing order.
     public var displayList: DisplayList? { lastList }
 
@@ -136,8 +138,11 @@ public final class ViewTree {
         if var canvas = frameCanvas, canvas.width == w, canvas.height == h, canvas.scale == scale,
            frameBackground == background, let old = lastList {
             frameCanvas = nil   // the only reference, so drawing doesn't copy the pixels
-            damage = list.damage(since: old)
-            for r in damage {
+            let plan = list.damagePlan(since: old)
+            scrollBlits = plan.blits
+            damage = plan.damage
+            for b in plan.blits { canvas.scroll(b.rect, dx: b.dx, dy: b.dy) }
+            for r in plan.damage {
                 canvas.clear(r, to: background)
                 canvas.draw(list, in: r)
             }
@@ -146,6 +151,7 @@ public final class ViewTree {
             var canvas = Canvas(width: w, height: h, scale: scale, background: background)
             canvas.glyphCache = glyphCache
             canvas.draw(list)
+            scrollBlits = []
             damage = w > 0 && h > 0 ? [list.fullRect] : []
             frameCanvas = canvas
             frameBackground = background

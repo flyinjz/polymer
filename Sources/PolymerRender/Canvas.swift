@@ -133,6 +133,207 @@ public struct Canvas {
         return TextLayout.width(glyphs)
     }
 
+    /// Source-over of a premultiplied sRGB colour onto pixel `i`.
+    @inline(__always) mutating func blendPremultiplied(_ i: Int, _ r: Float, _ g: Float, _ b: Float, _ a: Float) {
+        guard a > 0 else { return }
+        let k = 1 - a
+        pixels[i] = r + pixels[i] * k
+        pixels[i + 1] = g + pixels[i + 1] * k
+        pixels[i + 2] = b + pixels[i + 2] * k
+        pixels[i + 3] = a + pixels[i + 3] * k
+    }
+
+    /// Draws an image into `rect` (points), resampled with `filter` and blended
+    /// with `opacity` (0...1). Partial edge pixels get partial coverage.
+    public mutating func drawImage(_ image: RenderImage, in rect: Rect, opacity: Double = 1, filter: ImageFilter = .bilinear) {
+        let sw = image.width, sh = image.height
+        guard sw > 0, sh > 0, opacity > 0, !rect.isEmpty else { return }
+        let rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+        let x0 = rect.minX * scale, y0 = rect.minY * scale, x1 = rect.maxX * scale, y1 = rect.maxY * scale
+        let dw = x1 - x0, dh = y1 - y0
+        guard dw > 0, dh > 0 else { return }
+        let ix0 = max(clip.x, Int(x0.rounded(.down))), iy0 = max(clip.y, Int(y0.rounded(.down)))
+        let ix1 = min(clip.x + clip.width, Int(x1.rounded(.up))), iy1 = min(clip.y + clip.height, Int(y1.rounded(.up)))
+        guard ix0 < ix1, iy0 < iy1 else { return }
+        let src = image.bitmap.pixels
+        let inv255: Float = 1 / 255
+        let op = Float(min(max(opacity, 0), 1))
+
+        @inline(__always) func premulSample(_ sx: Int, _ sy: Int) -> (Float, Float, Float, Float) {
+            let o = (sy * sw + sx) * 4
+            let a = Float(src[o + 3]) * inv255
+            return (Float(src[o]) * inv255 * a, Float(src[o + 1]) * inv255 * a, Float(src[o + 2]) * inv255 * a, a)
+        }
+
+        for y in iy0..<iy1 {
+            let cy = min(Double(y + 1), y1) - max(Double(y), y0)
+            let v = (Double(y) + 0.5 - y0) / dh * Double(sh)
+            for x in ix0..<ix1 {
+                let cx = min(Double(x + 1), x1) - max(Double(x), x0)
+                let cov = Float(cx * cy) * op
+                guard cov > 0 else { continue }
+                let u = (Double(x) + 0.5 - x0) / dw * Double(sw)
+                let r, g, b, a: Float
+                switch filter {
+                case .nearest:
+                    let sx = min(max(Int(u.rounded(.down)), 0), sw - 1)
+                    let sy = min(max(Int(v.rounded(.down)), 0), sh - 1)
+                    (r, g, b, a) = premulSample(sx, sy)
+                case .bilinear:
+                    let fx = u - 0.5, fy = v - 0.5
+                    let xA = Int(fx.rounded(.down)), yA = Int(fy.rounded(.down))
+                    let tx = Float(fx - Double(xA)), ty = Float(fy - Double(yA))
+                    let sx0 = min(max(xA, 0), sw - 1), sx1 = min(max(xA + 1, 0), sw - 1)
+                    let sy0 = min(max(yA, 0), sh - 1), sy1 = min(max(yA + 1, 0), sh - 1)
+                    let p00 = premulSample(sx0, sy0), p10 = premulSample(sx1, sy0)
+                    let p01 = premulSample(sx0, sy1), p11 = premulSample(sx1, sy1)
+                    let w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty
+                    r = p00.0 * w00 + p10.0 * w10 + p01.0 * w01 + p11.0 * w11
+                    g = p00.1 * w00 + p10.1 * w10 + p01.1 * w01 + p11.1 * w11
+                    b = p00.2 * w00 + p10.2 * w10 + p01.2 * w01 + p11.2 * w11
+                    a = p00.3 * w00 + p10.3 * w10 + p01.3 * w01 + p11.3 * w11
+                }
+                blendPremultiplied((y * width + x) * 4, r * cov, g * cov, b * cov, a * cov)
+            }
+        }
+    }
+
+    /// Blurs the canvas pixels already drawn inside `rect` (points, clamped to
+    /// the current clip) using a 3-pass separable box approximation to a
+    /// Gaussian of standard deviation `radius` points (dark glass backdrop).
+    public mutating func backdropBlur(_ rect: Rect, radius: Double) {
+        guard radius > 0, !rect.isEmpty else { return }
+        let box = PixelRect.covering(rect, origin: origin, scale: scale).clamped(to: clip)
+        guard !box.isEmpty else { return }
+        let radii = Self.gaussBoxRadii(sigma: radius * scale)
+        guard radii.0 > 0 || radii.1 > 0 || radii.2 > 0 else { return }
+        let bw = box.width, bh = box.height
+        var bufA = [Float](repeating: 0, count: bw * bh * 4)
+        var bufB = [Float](repeating: 0, count: bw * bh * 4)
+        for y in 0..<bh {
+            let srcRow = ((box.y + y) * width + box.x) * 4
+            let dstRow = y * bw * 4
+            for i in 0..<(bw * 4) { bufA[dstRow + i] = pixels[srcRow + i] }
+        }
+        for r in [radii.0, radii.1, radii.2] where r > 0 {
+            Self.boxBlurH(src: bufA, dst: &bufB, w: bw, h: bh, r: r)
+            Self.boxBlurV(src: bufB, dst: &bufA, w: bw, h: bh, r: r)
+        }
+        for y in 0..<bh {
+            let dstRow = ((box.y + y) * width + box.x) * 4
+            let srcRow = y * bw * 4
+            for i in 0..<(bw * 4) { pixels[dstRow + i] = bufA[srcRow + i] }
+        }
+    }
+
+    /// Three box radii approximating a Gaussian of standard deviation `sigma` pixels.
+    static func gaussBoxRadii(sigma: Double) -> (Int, Int, Int) {
+        guard sigma > 0 else { return (0, 0, 0) }
+        let wIdeal = ((12 * sigma * sigma / 3) + 1).squareRoot()
+        var wl = Int(wIdeal.rounded(.down))
+        if wl % 2 == 0 { wl = max(1, wl - 1) }
+        let wu = wl + 2
+        let mIdeal = (12 * sigma * sigma - 3 * Double(wl * wl) - 12 * Double(wl) - 9) / (-4 * Double(wl) - 4)
+        let m = Int(mIdeal.rounded())
+        let rl = max(0, (wl - 1) / 2), ru = max(0, (wu - 1) / 2)
+        return (0 < m ? rl : ru, 1 < m ? rl : ru, 2 < m ? rl : ru)
+    }
+
+    private static func boxBlurH(src: [Float], dst: inout [Float], w: Int, h: Int, r: Int) {
+        let inv = Float(1) / Float(2 * r + 1)
+        for y in 0..<h {
+            let row = y * w * 4
+            let f0 = src[row], f1 = src[row + 1], f2 = src[row + 2], f3 = src[row + 3]
+            let lOff = row + (w - 1) * 4
+            let l0 = src[lOff], l1 = src[lOff + 1], l2 = src[lOff + 2], l3 = src[lOff + 3]
+            var a0 = Float(r + 1) * f0, a1 = Float(r + 1) * f1, a2 = Float(r + 1) * f2, a3 = Float(r + 1) * f3
+            for j in 0..<r {
+                let o = row + min(j, w - 1) * 4
+                a0 += src[o]; a1 += src[o + 1]; a2 += src[o + 2]; a3 += src[o + 3]
+            }
+            for x in 0..<w {
+                let addIdx = x + r
+                let remIdx = x - r - 1
+                if addIdx < w {
+                    let o = row + addIdx * 4
+                    a0 += src[o]; a1 += src[o + 1]; a2 += src[o + 2]; a3 += src[o + 3]
+                } else {
+                    a0 += l0; a1 += l1; a2 += l2; a3 += l3
+                }
+                if remIdx >= 0 {
+                    let o = row + remIdx * 4
+                    a0 -= src[o]; a1 -= src[o + 1]; a2 -= src[o + 2]; a3 -= src[o + 3]
+                } else {
+                    a0 -= f0; a1 -= f1; a2 -= f2; a3 -= f3
+                }
+                let o = row + x * 4
+                dst[o] = a0 * inv; dst[o + 1] = a1 * inv; dst[o + 2] = a2 * inv; dst[o + 3] = a3 * inv
+            }
+        }
+    }
+
+    private static func boxBlurV(src: [Float], dst: inout [Float], w: Int, h: Int, r: Int) {
+        let inv = Float(1) / Float(2 * r + 1)
+        let stride = w * 4
+        for x in 0..<w {
+            let col = x * 4
+            let f0 = src[col], f1 = src[col + 1], f2 = src[col + 2], f3 = src[col + 3]
+            let lOff = (h - 1) * stride + col
+            let l0 = src[lOff], l1 = src[lOff + 1], l2 = src[lOff + 2], l3 = src[lOff + 3]
+            var a0 = Float(r + 1) * f0, a1 = Float(r + 1) * f1, a2 = Float(r + 1) * f2, a3 = Float(r + 1) * f3
+            for j in 0..<r {
+                let o = min(j, h - 1) * stride + col
+                a0 += src[o]; a1 += src[o + 1]; a2 += src[o + 2]; a3 += src[o + 3]
+            }
+            for y in 0..<h {
+                let addIdx = y + r
+                let remIdx = y - r - 1
+                if addIdx < h {
+                    let o = addIdx * stride + col
+                    a0 += src[o]; a1 += src[o + 1]; a2 += src[o + 2]; a3 += src[o + 3]
+                } else {
+                    a0 += l0; a1 += l1; a2 += l2; a3 += l3
+                }
+                if remIdx >= 0 {
+                    let o = remIdx * stride + col
+                    a0 -= src[o]; a1 -= src[o + 1]; a2 -= src[o + 2]; a3 -= src[o + 3]
+                } else {
+                    a0 -= f0; a1 -= f1; a2 -= f2; a3 -= f3
+                }
+                let o = y * stride + col
+                dst[o] = a0 * inv; dst[o + 1] = a1 * inv; dst[o + 2] = a2 * inv; dst[o + 3] = a3 * inv
+            }
+        }
+    }
+
+    /// Shifts pixels inside `rect` in-place by `(dx, dy)` pixels (zero
+    /// allocation). Pixels moved into the newly exposed strip are untouched
+    /// and meant to be redrawn as damage.
+    public mutating func scroll(_ rect: PixelRect, dx: Int, dy: Int) {
+        let r = rect.clamped(to: PixelRect(x: 0, y: 0, width: width, height: height))
+        guard !r.isEmpty, dx != 0 || dy != 0, abs(dx) < r.width, abs(dy) < r.height else { return }
+        let copyW = r.width - abs(dx), copyH = r.height - abs(dy)
+        let dstX0 = dx >= 0 ? r.x + dx : r.x
+        let dstY0 = dy >= 0 ? r.y + dy : r.y
+        let srcX0 = dx >= 0 ? r.x : r.x - dx
+        let srcY0 = dy >= 0 ? r.y : r.y - dy
+        let yOrder: StrideThrough<Int> = dy > 0 ? stride(from: copyH - 1, through: 0, by: -1) : stride(from: 0, through: copyH - 1, by: 1)
+        for row in yOrder {
+            let sy = srcY0 + row, dyRow = dstY0 + row
+            if dx > 0 {
+                for col in stride(from: copyW - 1, through: 0, by: -1) {
+                    let s = (sy * width + srcX0 + col) * 4, d = (dyRow * width + dstX0 + col) * 4
+                    pixels[d] = pixels[s]; pixels[d + 1] = pixels[s + 1]; pixels[d + 2] = pixels[s + 2]; pixels[d + 3] = pixels[s + 3]
+                }
+            } else {
+                for col in 0..<copyW {
+                    let s = (sy * width + srcX0 + col) * 4, d = (dyRow * width + dstX0 + col) * 4
+                    pixels[d] = pixels[s]; pixels[d + 1] = pixels[s + 1]; pixels[d + 2] = pixels[s + 2]; pixels[d + 3] = pixels[s + 3]
+                }
+            }
+        }
+    }
+
     /// Draws the items of `list` that touch `region` (pixels; nil for the
     /// whole canvas), changing no pixel outside it. Pixels inside come out
     /// exactly as if the whole list were drawn.
@@ -146,6 +347,8 @@ public struct Canvas {
             case .rect(let r, let c): fill(r, c)
             case .path(let p, let c): fill(p, c)
             case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
+            case .image(let img, let r, let op, let f): drawImage(img, in: r, opacity: op, filter: f)
+            case .backdropBlur(let r, let radius): backdropBlur(r, radius: radius)
             }
         }
         clip = savedClip; origin = savedOrigin

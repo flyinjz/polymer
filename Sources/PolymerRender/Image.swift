@@ -1,5 +1,36 @@
 // Bitmaps and PNG, our own codec.
 import PolymerBase
+import Synchronization
+
+/// Sampling mode when drawing an image at a size other than its own pixels.
+public enum ImageFilter: Hashable, Sendable {
+    case nearest
+    case bilinear
+}
+
+/// An immutable image ready for display lists and views. Equality and hashing
+/// are O(1) by identity token so display-list diffing never scans pixels.
+public final class RenderImage: Hashable, Sendable {
+    private static let nextToken = Atomic<UInt64>(1)
+    private let token: UInt64
+    public let bitmap: Bitmap
+
+    public var width: Int { bitmap.width }
+    public var height: Int { bitmap.height }
+    public var size: Size { Size(width: Double(bitmap.width), height: Double(bitmap.height)) }
+
+    public init(_ bitmap: Bitmap) {
+        self.token = Self.nextToken.add(1, ordering: .relaxed).oldValue
+        self.bitmap = bitmap
+    }
+
+    public static func png(_ data: [UInt8]) throws(ImageError) -> RenderImage {
+        RenderImage(try PNG.decode(data))
+    }
+
+    public static func == (a: RenderImage, b: RenderImage) -> Bool { a.token == b.token }
+    public func hash(into h: inout Hasher) { h.combine(token) }
+}
 
 /// 8-bit RGBA, sRGB-encoded, straight alpha, rows top to bottom.
 public struct Bitmap: Hashable, Sendable {

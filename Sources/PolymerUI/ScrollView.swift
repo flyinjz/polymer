@@ -96,9 +96,8 @@ final class ScrollNode: Node {
     }
 
     override func draw(_ list: inout DisplayList) {
-        let shift = contentShift
-        list.clipped(to: frame) { c in
-            c.translated(by: shift) { c in children[0].draw(&c) }
+        list.scrolled(in: frame, offset: offset) { c in
+            children[0].draw(&c)
         }
     }
 

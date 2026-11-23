@@ -119,4 +119,102 @@ import PolymerRender
         full.draw(d)
         c.expect(canvas.bitmap == full.bitmap, "partial redraw equals a full draw")
     },
+    Check("render.image") { c in
+        // 2x2 image: red, green / blue, translucent white.
+        var bmp = Bitmap(width: 2, height: 2)
+        bmp.pixels = [
+            255, 0, 0, 255,     0, 255, 0, 255,
+            0, 0, 255, 255,     255, 255, 255, 128,
+        ]
+        let img = RenderImage(bmp)
+        // Nearest-neighbour 2x enlargement matches every quadrant cleanly.
+        var near = Canvas(width: 4, height: 4, scale: 1, background: .black)
+        near.drawImage(img, in: Rect(x: 0, y: 0, width: 4, height: 4), filter: .nearest)
+        let np = near.bitmap
+        c.expectEqual([np[0, 0].r, np[1, 1].r, np[2, 0].g, np[0, 2].b], [255, 255, 255, 255], "nearest quadrants")
+        c.expectEqual(np[3, 3].r, 128, "translucent white over black")
+
+        // Bilinear 2x enlargement blends across the seam between red and green.
+        var lin = Canvas(width: 4, height: 4, scale: 1, background: .black)
+        lin.drawImage(img, in: Rect(x: 0, y: 0, width: 4, height: 4), filter: .bilinear)
+        let lp = lin.bitmap
+        c.expect(lp[1, 0].r > lp[2, 0].r && lp[1, 0].g > 0 && lp[2, 0].r > 0, "bilinear interpolates smoothly between red and green")
+
+        // DisplayList recording and partial redraw equal a full draw.
+        var l1 = DisplayList(width: 40, height: 40, scale: 2)
+        l1.fill(Rect(x: 0, y: 0, width: 20, height: 20), Color(white: 0.1))
+        l1.drawImage(img, in: Rect(x: 2, y: 3, width: 8, height: 8), opacity: 0.75)
+        var l2 = DisplayList(width: 40, height: 40, scale: 2)
+        l2.fill(Rect(x: 0, y: 0, width: 20, height: 20), Color(white: 0.1))
+        l2.drawImage(img, in: Rect(x: 6, y: 3, width: 8, height: 8), opacity: 0.75)
+        var partial = Canvas(width: 40, height: 40, scale: 2, background: .black)
+        partial.draw(l1)
+        for r in l2.damage(since: l1) { partial.clear(r, to: .black); partial.draw(l2, in: r) }
+        var whole = Canvas(width: 40, height: 40, scale: 2, background: .black)
+        whole.draw(l2)
+        c.expect(partial.bitmap == whole.bitmap, "image partial redraw equals full draw")
+    },
+    Check("render.blur") { c in
+        // Sharp white stripe on black, blurred inside a dark glass panel.
+        var l1 = DisplayList(width: 64, height: 64, scale: 1)
+        l1.fill(Rect(x: 0, y: 0, width: 64, height: 64), .black)
+        l1.fill(Rect(x: 28, y: 0, width: 8, height: 64), .white)
+        l1.backdropBlur(Rect(x: 10, y: 10, width: 44, height: 44), radius: 4)
+        l1.fill(Rect(x: 10, y: 10, width: 44, height: 44), Color(white: 0.06, opacity: 0.5))
+
+        var full1 = Canvas(width: 64, height: 64, scale: 1, background: .black)
+        full1.draw(l1)
+        let b1 = full1.bitmap
+        // Inside the blurred panel the sharp edge softens outward; outside it stays crisp.
+        c.expect(b1[24, 32].r > 20 && b1[32, 32].r < 220, "blur softens the stripe inside the glass panel")
+        c.expectEqual([b1[24, 2].r, b1[32, 2].r], [0, 255], "outside the panel stays crisp")
+
+        // Moving the stripe behind the blur expands damage to the whole blur panel, so partial equals full.
+        var l2 = DisplayList(width: 64, height: 64, scale: 1)
+        l2.fill(Rect(x: 0, y: 0, width: 64, height: 64), .black)
+        l2.fill(Rect(x: 30, y: 0, width: 8, height: 64), .white)
+        l2.backdropBlur(Rect(x: 10, y: 10, width: 44, height: 44), radius: 4)
+        l2.fill(Rect(x: 10, y: 10, width: 44, height: 44), Color(white: 0.06, opacity: 0.5))
+        let dmg = l2.damage(since: l1)
+        for r in dmg { full1.clear(r, to: .black); full1.draw(l2, in: r) }
+        var full2 = Canvas(width: 64, height: 64, scale: 1, background: .black)
+        full2.draw(l2)
+        c.expect(full1.bitmap == full2.bitmap, "backdropBlur partial redraw equals full draw")
+    },
+    Check("render.scroll-blit") { c in
+        func frame(offsetY: Double, highlightRow: Int = -1) -> DisplayList {
+            var l = DisplayList(width: 100, height: 100, scale: 2)
+            l.fill(Rect(x: 0, y: 0, width: 50, height: 50), Color(white: 0.063))
+            l.fill(Rect(x: 0, y: 0, width: 50, height: 10), Color(white: 0.15))
+            l.scrolled(in: Rect(x: 0, y: 10, width: 50, height: 40), offset: Point(x: 0, y: offsetY)) { c in
+                for i in 0..<20 {
+                    let col = i == highlightRow ? Color(red: 0.8, green: 0.2, blue: 0.2) : Color(white: Double(i % 5 + 2) / 10)
+                    c.fill(Rect(x: 4, y: Double(i) * 10 + 1, width: 42, height: 8), col)
+                }
+            }
+            return l
+        }
+        let a = frame(offsetY: 0)
+        let b = frame(offsetY: 12)
+        let plan = b.damagePlan(since: a)
+        c.expectEqual(plan.blits, [ScrollBlit(rect: PixelRect(x: 0, y: 20, width: 100, height: 80), dx: 0, dy: -24)], "vertical scroll blits viewport")
+        c.expectEqual(plan.damage, [PixelRect(x: 0, y: 76, width: 100, height: 24)], "only newly exposed bottom strip is damaged")
+        var canvas = Canvas(width: 100, height: 100, scale: 2, background: .black)
+        canvas.draw(a)
+        for blit in plan.blits { canvas.scroll(blit.rect, dx: blit.dx, dy: blit.dy) }
+        for r in plan.damage { canvas.clear(r, to: .black); canvas.draw(b, in: r) }
+        var whole = Canvas(width: 100, height: 100, scale: 2, background: .black)
+        whole.draw(b)
+        c.expect(canvas.bitmap == whole.bitmap, "scroll blit + strip redraw equals full draw")
+
+        // Simultaneous scroll + item change inside overlap still matches full draw.
+        let cFrame = frame(offsetY: 18, highlightRow: 3)
+        let plan2 = cFrame.damagePlan(since: b)
+        c.expect(!plan2.blits.isEmpty, "simultaneous change still uses scroll blit")
+        for blit in plan2.blits { canvas.scroll(blit.rect, dx: blit.dx, dy: blit.dy) }
+        for r in plan2.damage { canvas.clear(r, to: .black); canvas.draw(cFrame, in: r) }
+        var whole2 = Canvas(width: 100, height: 100, scale: 2, background: .black)
+        whole2.draw(cFrame)
+        c.expect(canvas.bitmap == whole2.bitmap, "simultaneous scroll + row highlight equals full draw")
+    },
 ]
