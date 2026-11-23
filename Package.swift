@@ -28,20 +28,39 @@ let package = Package(
         // Images (PNG), display lists and the CPU reference renderer.
         .target(name: "PolymerRender", dependencies: ["PolymerBase", "PolymerText"]),
 
+        // Shared GPU abstraction, glyph texture atlas, and DisplayList batch compiler.
+        .target(name: "PolymerGPU", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
+
         // Views, layout and state.
         .target(name: "PolymerUI", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
 
+        // App runtime: commands, deterministic JSON settings, scenes, and screen registry.
+        .target(name: "PolymerApp", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI"]),
+
+        // Composable theme system, opt-in pgr design lint, themed controls, and Customize engine.
+        .target(name: "PolymerDesign", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerApp"]),
+
+        // 64-bit float real-time audio engine, lock-free SPSC queues, decoders, and DSP.
+        .target(name: "PolymerAudio", dependencies: ["PolymerBase"]),
+
         // `import Polymer`: everything an app uses.
-        .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI"]),
+        .target(name: "Polymer", dependencies: [
+            "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
+            "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio",
+        ]),
 
         // Checks run by `polymer check`, headless, the same on every OS.
-        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI"]),
+        .target(name: "PolymerChecks", dependencies: [
+            "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
+            "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio",
+        ]),
 
         // The `polymer` command.
         .executableTarget(
             name: "PolymerTools",
             dependencies: [
-                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerChecks",
+                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
+                "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio", "PolymerChecks",
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),
                 .target(name: "PolymerPlatformLinux", condition: .when(platforms: [.linux])),

@@ -38,9 +38,16 @@ deliberate difference is listed here, with the reason.
 | `.truncationMode(.head / .middle / .tail)` | Text is always cut at the end | Cut by `lineLimit` or by a height too short for its lines (at least one line is shown, as in SwiftUI). Other modes come when a screen needs them. |
 | Buttons focusable only with full keyboard access (macOS) | Buttons always take focus from Tab, never from a click | One behaviour on every OS. Space and Return press a focused button. |
 | `.onKeyPress(characters:)`, `.focusSection()`, `.defaultFocus`, `.focusedValue` | Not yet | `.focusable()`, `@FocusState`, `.focused(...)` and `.onKeyPress(_:)`, `(keys:)`, `(phases:)` exist. |
-| Focus ring drawn by the system | No ring yet | Its look comes with PolymerDesign. |
+| Focus ring drawn by the system | Drawn via `PolymerDesign` `.focusRing(isFocused:)` using `Theme.focusRing` | Themeable across presets (`Theme.pgr`, `.dark`, `.light`). |
 | Keys sent by the system | `ViewTree.key(_:)` with a `KeyPress` or text ("shift+tab") | Windows and headless tools drive the same entry point. |
-| `LazyVStack`, `LazyHStack` with `pinnedViews` | Same, without `pinnedViews` | Only a `ForEach` directly inside (through groups and views with a body) is lazy; anything else in the stack is built at once. Elements never built count as the average size of those that were, so the content length is an estimate until every row has been seen. Pinned headers come later. |
+| `LazyVStack`, `LazyHStack`, `LazyVGrid`, `LazyHGrid` with `pinnedViews` | Same (`GridItem` fixed/flexible/adaptive), without `pinnedViews` | Only a `ForEach` directly inside (through groups and views with a body) is lazy; anything else is built at once. Elements never built count as the average size of those that were, so content length is an estimate until every item has been seen. Pinned headers come later. |
+| `TextField` / `TextEditor` backed by `NSTextView` | `TextField` / `TextEditor` backed by `PolymerText.TextBuffer` / `TextEditorState` | Pure-Swift grapheme cursor, directional selection, coalescing undo/redo, IME `MarkedText` composition span, identical across OSes. |
+| `DragGesture` via `Gesture` protocol hierarchy | `DragGesture(minimumDistance:)` with `.onChanged` / `.onEnded` via `.gesture(_:)` | Covers scrubbing (`minimumDistance: 0`) and dragging with deterministic pointer routing in `ViewTree`. |
+| `.clipShape(_:)` vector mask | Clips `DisplayList` to bounding rect and hit-testing to exact shape geometry | Path-level pixel masking comes with GPU/mask pass; hit testing respects `Circle`, `RoundedRectangle`, `Capsule`, and `Path`. |
+| `.contextMenu` native OS menu | `.contextMenu { ... }` opens an overlay via `ViewTree.rightClick` / `secondaryClick` (and `--right-click`) | Deterministic headless inspection and theme-styled `PolymerContextMenu` backed by `PolymerApp.CommandRegistry`. |
+| `Commands` / `@AppStorage` | `PolymerApp.CommandRegistry` and deterministic JSON `SettingsStore` | One command registry drives menus, shortcuts, context menus, and `polymer describe`; settings avoid Foundation `UserDefaults`. |
+| System themes / dark mode | `PolymerDesign.Theme` (`Theme.pgr`, `.dark`, `.light`, `.with(...)`) + `CustomizeState` | Style-agnostic core with swappable themes, opt-in `DesignLint`, and per-element Customize keyed by `#id` / `Node.stablePath`. |
+| Platform accessibility bridge | `ViewTree.accessibilityTree() -> AccessibilityNode` (`toJSON()`, `describeTree()`, `polymer tree --a11y`) | Headless, deterministic accessibility export ready for OS screen-reader bridges. |
 
 ## Coordinates
 
