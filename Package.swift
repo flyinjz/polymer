@@ -20,6 +20,7 @@ let package = Package(
         .target(name: "PolymerPlatform", dependencies: ["PolymerBase"]),
         .target(name: "PolymerPlatformWindows", dependencies: ["PolymerPlatform"]),
         .target(name: "PolymerPlatformMac", dependencies: ["PolymerPlatform"]),
+        .target(name: "PolymerPlatformLinux", dependencies: ["PolymerPlatform"]),
 
         // Font parsing, outlines, the analytic rasteriser, text rendering.
         .target(name: "PolymerText", dependencies: ["PolymerBase"]),
@@ -43,6 +44,7 @@ let package = Package(
                 "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerChecks",
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),
+                .target(name: "PolymerPlatformLinux", condition: .when(platforms: [.linux])),
             ]
         ),
     ]

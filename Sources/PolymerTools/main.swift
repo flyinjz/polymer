@@ -10,6 +10,9 @@ Platform.install(files: WindowsFileSystem(), process: WindowsProcess())
 #elseif os(macOS)
 import PolymerPlatformMac
 Platform.install(files: MacFileSystem(), process: MacProcess())
+#elseif os(Linux)
+import PolymerPlatformLinux
+Platform.install(files: LinuxFileSystem(), process: LinuxProcess())
 #endif
 
 let usage = """

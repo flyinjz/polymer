@@ -5,9 +5,8 @@
 set -u
 config="${1:-release}"
 filter="${2:-}"
-dir="Release-windows-x86_64"
 flag="-c release"
-if [ "$config" = "debug" ]; then dir="Debug-windows-x86_64"; flag=""; fi
+if [ "$config" = "debug" ]; then flag=""; fi
 
 log="$(swift build $flag 2>&1)"
 if ! echo "$log" | grep -q "Build complete"; then
@@ -15,5 +14,7 @@ if ! echo "$log" | grep -q "Build complete"; then
     echo "build failed"
     exit 1
 fi
-".build/out/Products/$dir/polymer.exe" check $filter 2>&1 | grep -v "^pass"
+bin="$(swift build $flag --show-bin-path)/polymer"
+if [ -x "${bin}.exe" ]; then bin="${bin}.exe"; fi
+"$bin" check $filter 2>&1 | grep -v "^pass"
 exit "${PIPESTATUS[0]}"

@@ -71,11 +71,11 @@ public struct MacProcess: Process {
         return String(cString: v)
     }
     public func writeStandardError(_ text: String) {
-        var bytes = Array(text.utf8)
-        bytes.withUnsafeMutableBytes { _ = fwrite($0.baseAddress, 1, $0.count, stderr) }
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBytes { _ = Darwin.write(STDERR_FILENO, $0.baseAddress, $0.count) }
     }
     public func exit(_ code: Int32) -> Never {
-        fflush(stdout)
+        fflush(nil)
         Darwin.exit(code)
     }
 }
