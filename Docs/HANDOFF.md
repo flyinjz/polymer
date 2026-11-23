@@ -2,35 +2,33 @@
 
 Current state of the work. Every session updates this before it ends.
 
-## State (2026-11-14, Windows session 4)
+## State (2026-11-23, session 5)
 
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
   `Docs/DIFFERENCES.md`.
-- Sessions 1 to 4 are committed (2026-11-14), not pushed until the owner
-  says so. Signing needs the owner's passphrase cached on this PC; test
-  without opening a prompt:
-  `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
-  If it fails, ask the owner to run (PowerShell)
-  `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
-- Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (27 checks: base, text, render, ui).
+- Builds with `swift build` (debug and release) with zero warnings; `polymer check`
+  passes (34 checks: base, text, render, ui). Linux POSIX backend
+  (`PolymerPlatformLinux`) now lets headless builds and all checks run on
+  Linux identically to Windows (CoreText mean error 1.122/255, worst 1.930/255).
 
 ### Done
 
 - `Package.swift`: modules `PolymerBase`, `PolymerPlatform` (+ `…Windows`,
-  `…Mac` backends), `PolymerText`, `PolymerRender`, `PolymerUI`, `Polymer`
+  `…Mac`, `…Linux` backends), `PolymerText`, `PolymerRender`, `PolymerUI`, `Polymer`
   (umbrella), `PolymerChecks`, and the `polymer` command (`PolymerTools`).
   Modules are added as they get real code. macOS floor is 15 (see
   "For the owner's review").
 - `PolymerBase`: geometry (`Point`, `Size`, `Rect`, `EdgeInsets`,
-  `PixelRect`, `AffineTransform`), `Path` with flattening, `Color` with
-  exact sRGB transfer and pure-Swift `Math.log/exp` (identical on every
-  OS), `StableID`/`StableHasher` (FNV-1a + splitmix, pinned value in a
-  check), `Logger`, `ByteReader`, `JSON` (strict parser with line/column
-  errors, deterministic output), zlib inflate/deflate, CRC-32, Adler-32.
+  `PixelRect`, `AffineTransform`), `Path` (rect, roundedRect, ellipseIn,
+  flattening), `Color` with exact sRGB transfer and pure-Swift
+  `Math.log/exp/sin/cos` (identical on every OS), `StableID`/`StableHasher`
+  (FNV-1a + splitmix, pinned value in a check), `Logger`, `ByteReader`, `JSON`
+  (strict parser with line/column errors, deterministic output), zlib
+  inflate/deflate, CRC-32, Adler-32.
 - `PolymerPlatform`: `FileSystem` and `Process` interfaces, installed by the
-  entry point; Windows backend (Win32, UTF-16 paths) and Mac backend
-  (POSIX; written but **not yet compiled on a Mac**).
+  entry point; Windows backend (Win32, UTF-16 paths), Linux backend (POSIX /
+  Glibc, verified), and Mac backend (POSIX / Darwin; updated for Swift 6
+  concurrency safety, still **not yet compiled on a Mac**).
 - `PolymerText`:
   - OpenType parser (`FontFace`): table directory and collections, cmap
     4/12, hmtx, `glyf` (simple and composite), CFF with a Type 2
@@ -48,24 +46,30 @@ Current state of the work. Every session updates this before it ends.
     ellipsis).
   - `GlyphCache`: outlines and coverage masks kept between draws, keyed by
     the exact fractional pixel offset (same pixels cached or not).
-- `PolymerRender`: `Bitmap`, PNG decode/encode (our own), `Canvas` (CPU
-  reference renderer: rects, paths, glyph runs, rectangular clipping),
-  `DisplayList` with damage (session 4; see "Display list and damage").
+- `PolymerRender`: `Bitmap`, `RenderImage` (O(1) token equality/hashing),
+  PNG decode/encode (our own), `Canvas` (CPU reference renderer: rects, paths,
+  glyph runs, images with nearest/premultiplied-bilinear sampling, 3-pass
+  separable Gaussian `backdropBlur` for dark glass, in-place `scroll` blit,
+  rectangular clipping), `DisplayList` with damage regions, opacity scaling,
+  blur-aware damage expansion, and `damagePlan` scroll-blit optimization.
 - `PolymerUI`:
   - `View` (@MainActor, like SwiftUI), `ViewBuilder` (parameter packs,
     if/else, optionals), `Group`, `ForEach` (by `id:` key path,
     `Identifiable`, or an index range), `.id(_:)`.
   - Views: `Text` (wrapping, `lineLimit`, `multilineTextAlignment`, cut
     to the height it is offered with an ellipsis on the last line that fits),
-    `Color`, `Rectangle`, `Spacer`, `Divider`, `HStack`, `VStack`,
-    `ZStack`, `Button`, `ScrollView` (vertical, horizontal or both).
+    `Color`, `Rectangle`, `RoundedRectangle`, `Circle`, `Capsule`, `Path`,
+    `Image` (`.resizable()`, `.interpolation(_:)`), `BackdropBlur`, `Spacer`,
+    `Divider`, `HStack`, `VStack`, `ZStack`, `Button`, `ScrollView` (vertical,
+    horizontal or both).
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
-  - Keyboard and focus (session 3): `.focusable()`, `@FocusState` with
+  - Keyboard and focus (session 3 + 5): `.focusable()`, `@FocusState` with
     `.focused($b)` and `.focused($v, equals:)`, `.onKeyPress(...)`,
     `KeyEquivalent`, `EventModifiers`, `KeyPress`; `ViewTree.key(_:)`,
-    `focusedElement`; see "How focus works" below.
+    `focusedElement`; moving focus automatically scrolls enclosing
+    `ScrollView`s to keep the focused element in view.
   - Pointer (session 3): `ViewTree.pointerMoved/Down/Up/Exited`; buttons
     run on release over them; `ButtonStyle` with `isPressed` and
     `.buttonStyle(_:)` (`PlainButtonStyle` is the default); `.onHover`.
@@ -73,27 +77,39 @@ Current state of the work. Every session updates this before it ends.
     handlers do nothing and swallow the press, leave the Tab order, give up
     focus, and show "disabled" in the element tree. Button styles can use
     `@Environment` and `@State` (`LinksNestedProperties`).
-  - Modifiers: `padding`, `frame` (fixed and flexible), `background`,
-    `overlay`, `border`, `clipped`, `font`, `foregroundStyle`,
-    `lineLimit`, `multilineTextAlignment`, `environment(_:_:)`,
-    `onTapGesture`.
+  - Modifiers: `padding`, `frame` (fixed and flexible), `aspectRatio`,
+    `background`, `overlay`, `border`, `clipped`, `opacity`, `offset`, `font`,
+    `foregroundStyle`, `lineLimit`, `multilineTextAlignment`,
+    `environment(_:_:)`, `onTapGesture`, `onChange(of:initial:_:)`,
+    `accessibilityIdentifier(_:)`, `animation(_:value:)`.
+  - Animation & scroll physics (session 5): `Animation` (linear, cubic Bézier
+    `timingCurve`, analytical damped harmonic `spring`/`snappy`/`smooth`,
+    `.delay`, `.speed`), `withAnimation`, `.animation(_:value:)`,
+    `ScrollPhysics`, `ViewTree.tick(_:)`, `ViewTree.hasActiveAnimations`,
+    `ViewTree.fling(at:vx:vy:)`. Opacity and offset animate with zero body
+    re-evaluations and zero relayout.
+  - Element addressing (session 5): `.accessibilityIdentifier(_:)` shown as
+    `#id` in the element tree, deterministic `Node.stablePath` / `stableID`,
+    `ViewTree.click(id:)`, `ViewTree.point(ofID:)`, `ViewTree.stablePath(ofID:)`.
   - State: `@State`, `@Binding`, `@Bindable`, `@Environment`,
     `EnvironmentKey`, and Swift's `@Observable` classes. A change
     re-evaluates only the views that read the value.
   - `ViewTree`: a live tree of a root view. `update()` re-evaluates
-    invalidated views and lays out; `render()` gives a `Bitmap`;
-    `elementTree` gives the tree as text; `click(at:)`, `click(text:)`
-    and `scroll(at:dx:dy:)` drive input; `onInvalidate` is the hook a
-    window uses to schedule a frame; `bodyEvaluations` counts work for
-    checks.
+    invalidated views and lays out; `tick(_:)` advances animations and flings;
+    `render()` gives a `Bitmap` using `damagePlan` (scroll blits + minimal
+    damage); `elementTree` gives the tree as text; `click(at:)`, `click(text:)`,
+    `click(id:)`, `scroll(at:dx:dy:)`, and `fling(at:vx:vy:)` drive input;
+    `onInvalidate` is the hook a window uses to schedule a frame;
+    `bodyEvaluations` counts work for checks.
   - `ImageRenderer` (SwiftUI's name) for one-shot images and trees.
-  - Not yet: scroll bars, animation, element names, pressed looks for
-    tap gestures, a focus ring (a PolymerDesign look), scrolling the focused view
-    into view.
+  - Not yet: scroll bars (PolymerDesign look), focus ring (PolymerDesign look),
+    `TextField` / text editing, pressed looks for tap gestures, `PolymerDesign`
+    tokens/Customize/context menus, `PolymerApp`, `PolymerGPU`, window
+    backends, `PolymerAudio`.
 - `polymer` command: `check [filter] [--list] [--verbose]`,
-  `render <screen> <out.png> [--scale N] [--click "text"] [--scroll N]...`,
-  `tree <screen> [--click "text"] [--scroll N] [--key K]...` (steps are applied in
-  the order given), `zoom <in> <out> x y w h factor`.
+  `render <screen> <out.png> [--scale N] [--click "text"] [--click-id "id"] [--scroll N]...`,
+  `tree <screen> [--click "text"] [--click-id "id"] [--scroll N] [--key K]...`
+  (steps are applied in the order given), `zoom <in> <out> x y w h factor`.
   Screens: `albums` (static), `counter` (state and buttons), `list` (a
   scroll view of forty rows), `library` (a lazy stack of 20,000 rows). They live in
   `PolymerChecks/UIChecks.swift`; a real screen registry comes with
@@ -377,21 +393,28 @@ side) to confirm the luminance rule between the two measured colours.
    emoji, full Unicode line breaking (UAX #14; today spaces and hyphens),
    font fallback, HarfBuzz behind our interface for complex scripts,
    quantised subpixel positions if the cache needs a higher hit rate.
-4. `PolymerRender`: CPU renderer (rects, paths, glyph runs, clipping),
-   ~~display list with damage regions~~ (session 4);
-   next images, blur, scrolling by moving pixels; then
-   `PolymerGPU` (D3D12 here).
+4. `PolymerRender`: ~~CPU renderer (rects, paths, glyph runs, clipping),
+   display list with damage regions, images, backdrop blur, scrolling by
+   moving pixels~~ done (session 4 + 5); next `PolymerGPU` (shared interface,
+   then D3D12 on Windows and Metal on Mac).
 5. `PolymerUI`: ~~views, result builders, observation-based state,
-   identity, layout, text wrapping, buttons and clicks~~ done; next:
-   ~~lazy stacks~~ and ~~keyboard and focus~~ (done), scroll bars
-   and scroll physics, element names (stable paths for
-   Customize and for driving input), a focus ring, animation, ~~skipping bodies of unchanged `Equatable`
-   views~~, ~~text cut to the height it is given~~ (both done, session 4).
-6. `PolymerDesign`: tokens, components, Customize and right-click menus.
-7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
-   pacing, DWM glass. `ViewTree.onInvalidate` is where a window asks for
-   a frame.
-8. The i2s Albums page on Polymer; then `PolymerAudio`.
+   identity, layout, text wrapping, buttons and clicks, lazy stacks,
+   keyboard and focus, focus scroll-into-view, images and shapes, visual
+   modifiers, `.accessibilityIdentifier` / stable paths, deterministic
+   animation and scroll physics, skipping bodies of unchanged `Equatable`
+   views, text cut to the height it is given~~ done; next: `TextField` /
+   text editing (`PolymerText` editing model + caret/selection/undo),
+   scroll bars and focus ring (with `PolymerDesign`).
+6. `PolymerApp`: command system (one model for menus, shortcuts, right-click
+   menus), settings persistence, screen registry, `polymer describe`.
+7. `PolymerDesign`: tokens, components, Customize and right-click menus
+   (design-visible defaults need owner review).
+8. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
+   pacing, DWM glass; AppKit window + Metal layer on Mac. `ViewTree.onInvalidate`
+   and `ViewTree.hasActiveAnimations` / `tick(_:)` drive display-paced frames.
+9. `PolymerAudio`: real-time engine, decoders (WAV/AIFF/FLAC/ALAC/MP3), DSP
+   (EQ, ReplayGain, resampler, dither, crossfade/crossfeed), WASAPI/CoreAudio.
+10. The i2s Albums page on Polymer (`I2SCore` + `I2S`).
 
 ## Windows side (where all sessions run)
 
@@ -478,6 +501,15 @@ side) to confirm the luminance rule between the two measured colours.
   positions rather than quantised ones, so nothing changes in the
   CoreText comparison. It empties itself when it reaches its limit (no
   LRU yet).
+- 2026-11-23 (session 5): added `PolymerPlatformLinux` (POSIX via Glibc) so
+  headless builds and checks run identically on Linux. `RenderImage` uses an
+  atomic token for O(1) equality/hashing in display lists. `backdropBlur`
+  expands intersecting damage to the full blur bounds so partial redraws
+  never double-blur seams. `.opacity(_:)` multiplies drawn items via
+  `DisplayList.withOpacity` (zero offscreen buffer, zero body re-evaluations
+  during animation; per-leaf rather than group compositing, noted in
+  `DIFFERENCES.md`). `Animation` and `ScrollPhysics` step deterministically
+  via `ViewTree.tick(_:)` using pure-Swift `Math.sin/cos/exp`.
 
 ## For the owner's review (design-visible, not blocking)
 
