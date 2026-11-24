@@ -25,6 +25,19 @@ public struct DisplayItem: Hashable, Sendable {
     public var clip: PixelRect
     /// Pixels the operation may change: its extent inside the clip, never empty.
     public var bounds: PixelRect
+    /// Analytical clip paths in canvas physical pixels (empty when only rectangular clip applies).
+    public var clipPaths: [Path]
+
+    /// The innermost analytical clip path in canvas physical pixels, if any.
+    public var clipPath: Path? { clipPaths.last }
+
+    public init(operation: Operation, origin: Point, clip: PixelRect, bounds: PixelRect, clipPaths: [Path] = []) {
+        self.operation = operation
+        self.origin = origin
+        self.clip = clip
+        self.bounds = bounds
+        self.clipPaths = clipPaths
+    }
 }
 
 /// A scroll view recorded in a display list, so the next frame can move the
@@ -89,6 +102,8 @@ public struct DisplayList: Sendable {
     public private(set) var scrollHints: [ScrollHint] = []
     /// Recording is limited to this pixel rectangle.
     public private(set) var clip: PixelRect
+    /// Active analytical clip paths in canvas physical pixels (empty when only rectangular clip applies).
+    public private(set) var clipPaths: [Path] = []
     /// Added to every position recorded, in points.
     public private(set) var origin: Point = .zero
     /// Multiplier applied to every colour and image recorded (0...1).
@@ -107,6 +122,7 @@ public struct DisplayList: Sendable {
         items.removeAll(keepingCapacity: true)
         scrollHints.removeAll(keepingCapacity: true)
         clip = fullRect
+        clipPaths.removeAll(keepingCapacity: true)
         origin = .zero
         opacity = 1.0
     }
@@ -120,6 +136,42 @@ public struct DisplayList: Sendable {
         clip = PixelRect.covering(rect, origin: origin, scale: scale).clamped(to: clip)
         body(&self)
         clip = saved
+    }
+
+    /// Runs `body` with recording analytically clipped to `path` (points, non-zero
+    /// winding, anti-aliased) inside the current clip. Supports arbitrary nesting.
+    public mutating func clipped(to path: Path, _ body: (inout DisplayList) -> Void) {
+        let savedClip = clip
+        let savedPathCount = clipPaths.count
+        if path.isEmpty {
+            clip = PixelRect(x: 0, y: 0, width: 0, height: 0)
+            body(&self)
+            clip = savedClip
+            return
+        }
+        let t = AffineTransform(a: scale, b: 0, c: 0, d: scale, tx: origin.x * scale, ty: origin.y * scale)
+        let pixelPath = path.applying(t)
+        let cb = pixelPath.controlBounds
+        if cb.isEmpty {
+            clip = PixelRect(x: 0, y: 0, width: 0, height: 0)
+            body(&self)
+            clip = savedClip
+            return
+        }
+        let x0 = Int(cb.minX.rounded(.down))
+        let y0 = Int(cb.minY.rounded(.down))
+        let x1 = Int(cb.maxX.rounded(.up))
+        let y1 = Int(cb.maxY.rounded(.up))
+        let pathClip = PixelRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
+        clip = pathClip.clamped(to: clip)
+        if !clip.isEmpty {
+            clipPaths.append(pixelPath)
+        }
+        body(&self)
+        if clipPaths.count > savedPathCount {
+            clipPaths.removeLast(clipPaths.count - savedPathCount)
+        }
+        clip = savedClip
     }
 
     /// Runs `body` with everything it records moved by `offset` (points).
@@ -152,7 +204,7 @@ public struct DisplayList: Sendable {
         let end = items.count
         clip = savedClip
         origin = savedOrigin
-        if !innerClip.isEmpty {
+        if !innerClip.isEmpty, clipPaths.isEmpty {
             scrollHints.append(ScrollHint(clip: innerClip, offset: offset, startIndex: start, endIndex: end))
         }
     }
@@ -214,7 +266,7 @@ public struct DisplayList: Sendable {
     private mutating func add(_ op: DisplayItem.Operation, _ extent: PixelRect) {
         let bounds = extent.clamped(to: clip)
         guard !bounds.isEmpty else { return }
-        items.append(DisplayItem(operation: op, origin: origin, clip: clip, bounds: bounds))
+        items.append(DisplayItem(operation: op, origin: origin, clip: clip, bounds: bounds, clipPaths: clipPaths))
     }
 
     // MARK: Damage
@@ -322,6 +374,7 @@ public struct DisplayList: Sendable {
                 var bg: [DisplayItem] = []
                 for item in list.items[0..<end] where item.bounds.intersects(clip) {
                     guard case .rect(let r, _) = item.operation,
+                          item.clipPaths.isEmpty,
                           (r.minX + item.origin.x) * scale <= Double(clip.x) + 1e-9,
                           (r.minY + item.origin.y) * scale <= Double(clip.y) + 1e-9,
                           (r.maxX + item.origin.x) * scale >= Double(clip.x + clip.width) - 1e-9,
@@ -377,15 +430,18 @@ public struct DisplayList: Sendable {
                     var ox: Int64
                     var oy: Int64
                     var clip: PixelRect
+                    var clipPaths: [Path]
                 }
                 func quantize(_ v: Double) -> Int64 { Int64((v * 1_000_000).rounded()) }
                 let dOx = Double(c.dx) / scale, dOy = Double(c.dy) / scale
+                let shiftTransform = AffineTransform.translation(x: Double(c.dx), y: Double(c.dy))
                 var oldOverlap: [(ShiftedKey, PixelRect)] = []
                 for item in old.items[c.oldHint.startIndex..<c.oldHint.endIndex] {
                     let sb = PixelRect(x: item.bounds.x + c.dx, y: item.bounds.y + c.dy, width: item.bounds.width, height: item.bounds.height).clamped(to: overlap)
                     guard !sb.isEmpty else { continue }
                     let sc = PixelRect(x: item.clip.x + c.dx, y: item.clip.y + c.dy, width: item.clip.width, height: item.clip.height).clamped(to: overlap)
-                    let key = ShiftedKey(op: item.operation, ox: quantize(item.origin.x + dOx), oy: quantize(item.origin.y + dOy), clip: sc)
+                    let shiftedPaths = item.clipPaths.isEmpty ? [] : item.clipPaths.map { $0.applying(shiftTransform) }
+                    let key = ShiftedKey(op: item.operation, ox: quantize(item.origin.x + dOx), oy: quantize(item.origin.y + dOy), clip: sc, clipPaths: shiftedPaths)
                     oldOverlap.append((key, sb))
                 }
                 var newOverlap: [(ShiftedKey, PixelRect)] = []
@@ -393,7 +449,7 @@ public struct DisplayList: Sendable {
                     let nb = item.bounds.clamped(to: overlap)
                     guard !nb.isEmpty else { continue }
                     let nc = item.clip.clamped(to: overlap)
-                    let key = ShiftedKey(op: item.operation, ox: quantize(item.origin.x), oy: quantize(item.origin.y), clip: nc)
+                    let key = ShiftedKey(op: item.operation, ox: quantize(item.origin.x), oy: quantize(item.origin.y), clip: nc, clipPaths: item.clipPaths)
                     newOverlap.append((key, nb))
                 }
                 var places: [ShiftedKey: (indices: [Int], next: Int)] = [:]

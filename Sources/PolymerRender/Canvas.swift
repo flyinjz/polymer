@@ -338,20 +338,253 @@ public struct Canvas {
     /// whole canvas), changing no pixel outside it. Pixels inside come out
     /// exactly as if the whole list were drawn.
     public mutating func draw(_ list: DisplayList, in region: PixelRect? = nil) {
-        let region = region ?? PixelRect(x: 0, y: 0, width: width, height: height)
+        let canvasRect = PixelRect(x: 0, y: 0, width: width, height: height)
+        let region = (region ?? canvasRect).clamped(to: canvasRect)
+        guard !region.isEmpty else { return }
         let savedClip = clip, savedOrigin = origin
+        var cachedClipPaths: [Path] = []
+        var cachedClipMask = CoverageMask.empty
         for item in list.items where item.bounds.intersects(region) {
             clip = item.clip.clamped(to: region)
             origin = item.origin
-            switch item.operation {
-            case .rect(let r, let c): fill(r, c)
-            case .path(let p, let c): fill(p, c)
-            case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
-            case .image(let img, let r, let op, let f): drawImage(img, in: r, opacity: op, filter: f)
-            case .backdropBlur(let r, let radius): backdropBlur(r, radius: radius)
+            if item.clipPaths.isEmpty {
+                switch item.operation {
+                case .rect(let r, let c): fill(r, c)
+                case .path(let p, let c): fill(p, c)
+                case .glyphs(let g): drawGlyphs(g.glyphs, font: g.font, size: g.size, at: g.position, color: g.color, options: g.options)
+                case .image(let img, let r, let op, let f): drawImage(img, in: r, opacity: op, filter: f)
+                case .backdropBlur(let r, let radius): backdropBlur(r, radius: radius)
+                }
+            } else {
+                if item.clipPaths != cachedClipPaths {
+                    cachedClipPaths = item.clipPaths
+                    cachedClipMask = clipCoverageMask(for: item.clipPaths)
+                }
+                drawClipped(item, activeClip: clip, clipMask: cachedClipMask)
             }
         }
         clip = savedClip; origin = savedOrigin
+    }
+
+    private func clipCoverageMask(for clipPaths: [Path]) -> CoverageMask {
+        guard let first = clipPaths.first else { return .empty }
+        var firstMask = Rasterizer.rasterize(first.flattened(tolerance: 0.01))
+        guard firstMask.width > 0, firstMask.height > 0 else { return .empty }
+
+        // Eliminate Float32 scanline accumulation residuals (~1e-7) so pixels
+        // strictly outside or strictly inside a clip path have exact 0 or 1 coverage.
+        let eps: Float = 1e-5
+        if clipPaths.count == 1 {
+            for i in firstMask.coverage.indices {
+                let v = firstMask.coverage[i]
+                if v <= eps { firstMask.coverage[i] = 0 }
+                else if v >= 1 - eps { firstMask.coverage[i] = 1 }
+            }
+            return firstMask
+        }
+
+        let canvasRect = PixelRect(x: 0, y: 0, width: width, height: height)
+        var masks: [CoverageMask] = [firstMask]
+        masks.reserveCapacity(clipPaths.count)
+        var rect = PixelRect(x: firstMask.left, y: firstMask.top, width: firstMask.width, height: firstMask.height)
+            .clamped(to: canvasRect)
+        guard !rect.isEmpty else { return .empty }
+
+        for i in 1..<clipPaths.count {
+            let m = Rasterizer.rasterize(clipPaths[i].flattened(tolerance: 0.01))
+            guard m.width > 0, m.height > 0 else { return .empty }
+            rect = rect.clamped(to: PixelRect(x: m.left, y: m.top, width: m.width, height: m.height))
+            guard !rect.isEmpty else { return .empty }
+            masks.append(m)
+        }
+
+        let rw = rect.width, rh = rect.height
+        var combined = [Float](repeating: 1, count: rw * rh)
+        for m in masks {
+            for y in 0..<rh {
+                let py = rect.y + y
+                let srcRow = (py - m.top) * m.width + (rect.x - m.left)
+                let dstRow = y * rw
+                for x in 0..<rw {
+                    var v = m.coverage[srcRow + x]
+                    if v <= eps { v = 0 }
+                    else if v >= 1 - eps { v = 1 }
+                    combined[dstRow + x] *= v
+                }
+            }
+        }
+        return CoverageMask(left: rect.x, top: rect.y, width: rw, height: rh, coverage: combined)
+    }
+
+    private mutating func drawClipped(_ item: DisplayItem, activeClip: PixelRect, clipMask: CoverageMask) {
+        guard clipMask.width > 0, clipMask.height > 0 else { return }
+        let maskRect = PixelRect(x: clipMask.left, y: clipMask.top, width: clipMask.width, height: clipMask.height)
+        let effectiveClip = activeClip.clamped(to: maskRect)
+        guard !effectiveClip.isEmpty else { return }
+
+        switch item.operation {
+        case .rect(let r, let c):
+            fillClipped(r, c, clipMask: clipMask, clip: effectiveClip)
+        case .path(let p, let c):
+            let t = AffineTransform(a: scale, b: 0, c: 0, d: scale, tx: origin.x * scale, ty: origin.y * scale)
+            let contours = p.applying(t).flattened(tolerance: 0.01)
+            compositeClipped(Rasterizer.rasterize(contours), c, clipMask: clipMask, clip: effectiveClip)
+        case .glyphs(let g):
+            drawGlyphsClipped(g, clipMask: clipMask, clip: effectiveClip)
+        case .image(let img, let r, let op, let f):
+            drawImageClipped(img, in: r, opacity: op, filter: f, clipMask: clipMask, clip: effectiveClip)
+        case .backdropBlur(let r, let radius):
+            backdropBlurClipped(r, radius: radius, blurBounds: item.bounds, clipMask: clipMask, writeClip: effectiveClip)
+        }
+    }
+
+    private mutating func fillClipped(_ rect: Rect, _ color: Color, clipMask: CoverageMask, clip: PixelRect) {
+        let rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+        let x0 = rect.minX * scale, y0 = rect.minY * scale, x1 = rect.maxX * scale, y1 = rect.maxY * scale
+        let ix0 = max(clip.x, Int(x0.rounded(.down))), iy0 = max(clip.y, Int(y0.rounded(.down)))
+        let ix1 = min(clip.x + clip.width, Int(x1.rounded(.up))), iy1 = min(clip.y + clip.height, Int(y1.rounded(.up)))
+        guard ix0 < ix1, iy0 < iy1 else { return }
+        for y in iy0..<iy1 {
+            let cy = min(Double(y + 1), y1) - max(Double(y), y0)
+            let maskRow = (y - clipMask.top) * clipMask.width - clipMask.left
+            for x in ix0..<ix1 {
+                let clipCov = clipMask.coverage[maskRow + x]
+                guard clipCov > 0 else { continue }
+                let cx = min(Double(x + 1), x1) - max(Double(x), x0)
+                blend((y * width + x) * 4, color, Float(cx * cy) * clipCov)
+            }
+        }
+    }
+
+    private mutating func compositeClipped(_ m: CoverageMask, _ color: Color, clipMask: CoverageMask, clip: PixelRect) {
+        let y0 = max(m.top, clip.y), y1 = min(m.top + m.height, clip.y + clip.height)
+        let x0 = max(m.left, clip.x), x1 = min(m.left + m.width, clip.x + clip.width)
+        guard x0 < x1, y0 < y1 else { return }
+        for y in y0..<y1 {
+            let row = (y - m.top) * m.width - m.left
+            let maskRow = (y - clipMask.top) * clipMask.width - clipMask.left
+            for x in x0..<x1 {
+                let c = m.coverage[row + x] * clipMask.coverage[maskRow + x]
+                if c > 0 { blend((y * width + x) * 4, color, c) }
+            }
+        }
+    }
+
+    private mutating func drawGlyphsClipped(_ run: GlyphRun, clipMask: CoverageMask, clip: PixelRect) {
+        let px = run.size * scale
+        let ox = (run.position.x + origin.x) * scale, oy = (run.position.y + origin.y) * scale
+        let top = Int((oy - px * 2).rounded(.down)), bottom = Int((oy + px).rounded(.up))
+        if bottom <= clip.y || top >= clip.y + clip.height { return }
+        let lin = run.color.linear
+        let luminance = 0.2126 * Double(lin.r) + 0.7152 * Double(lin.g) + 0.0722 * Double(lin.b)
+        for g in run.glyphs {
+            let mask = GlyphRenderer.mask(font: run.font, glyph: g.glyph, pixelSize: px, x: ox + g.x * scale, y: oy,
+                                          luminance: luminance, options: run.options, cache: glyphCache)
+            compositeClipped(mask, run.color, clipMask: clipMask, clip: clip)
+        }
+    }
+
+    private mutating func drawImageClipped(_ image: RenderImage, in rect: Rect, opacity: Double, filter: ImageFilter,
+                                           clipMask: CoverageMask, clip: PixelRect) {
+        let sw = image.width, sh = image.height
+        guard sw > 0, sh > 0, opacity > 0, !rect.isEmpty else { return }
+        let rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+        let x0 = rect.minX * scale, y0 = rect.minY * scale, x1 = rect.maxX * scale, y1 = rect.maxY * scale
+        let dw = x1 - x0, dh = y1 - y0
+        guard dw > 0, dh > 0 else { return }
+        let ix0 = max(clip.x, Int(x0.rounded(.down))), iy0 = max(clip.y, Int(y0.rounded(.down)))
+        let ix1 = min(clip.x + clip.width, Int(x1.rounded(.up))), iy1 = min(clip.y + clip.height, Int(y1.rounded(.up)))
+        guard ix0 < ix1, iy0 < iy1 else { return }
+        let src = image.bitmap.pixels
+        let inv255: Float = 1 / 255
+        let op = Float(min(max(opacity, 0), 1))
+
+        @inline(__always) func premulSample(_ sx: Int, _ sy: Int) -> (Float, Float, Float, Float) {
+            let o = (sy * sw + sx) * 4
+            let a = Float(src[o + 3]) * inv255
+            return (Float(src[o]) * inv255 * a, Float(src[o + 1]) * inv255 * a, Float(src[o + 2]) * inv255 * a, a)
+        }
+
+        for y in iy0..<iy1 {
+            let cy = min(Double(y + 1), y1) - max(Double(y), y0)
+            let v = (Double(y) + 0.5 - y0) / dh * Double(sh)
+            let maskRow = (y - clipMask.top) * clipMask.width - clipMask.left
+            for x in ix0..<ix1 {
+                let clipCov = clipMask.coverage[maskRow + x]
+                guard clipCov > 0 else { continue }
+                let cx = min(Double(x + 1), x1) - max(Double(x), x0)
+                let cov = Float(cx * cy) * op * clipCov
+                guard cov > 0 else { continue }
+                let u = (Double(x) + 0.5 - x0) / dw * Double(sw)
+                let r, g, b, a: Float
+                switch filter {
+                case .nearest:
+                    let sx = min(max(Int(u.rounded(.down)), 0), sw - 1)
+                    let sy = min(max(Int(v.rounded(.down)), 0), sh - 1)
+                    (r, g, b, a) = premulSample(sx, sy)
+                case .bilinear:
+                    let fx = u - 0.5, fy = v - 0.5
+                    let xA = Int(fx.rounded(.down)), yA = Int(fy.rounded(.down))
+                    let tx = Float(fx - Double(xA)), ty = Float(fy - Double(yA))
+                    let sx0 = min(max(xA, 0), sw - 1), sx1 = min(max(xA + 1, 0), sw - 1)
+                    let sy0 = min(max(yA, 0), sh - 1), sy1 = min(max(yA + 1, 0), sh - 1)
+                    let p00 = premulSample(sx0, sy0), p10 = premulSample(sx1, sy0)
+                    let p01 = premulSample(sx0, sy1), p11 = premulSample(sx1, sy1)
+                    let w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty
+                    r = p00.0 * w00 + p10.0 * w10 + p01.0 * w01 + p11.0 * w11
+                    g = p00.1 * w00 + p10.1 * w10 + p01.1 * w01 + p11.1 * w11
+                    b = p00.2 * w00 + p10.2 * w10 + p01.2 * w01 + p11.2 * w11
+                    a = p00.3 * w00 + p10.3 * w10 + p01.3 * w01 + p11.3 * w11
+                }
+                blendPremultiplied((y * width + x) * 4, r * cov, g * cov, b * cov, a * cov)
+            }
+        }
+    }
+
+    private mutating func backdropBlurClipped(_ rect: Rect, radius: Double, blurBounds: PixelRect,
+                                              clipMask: CoverageMask, writeClip: PixelRect) {
+        guard radius > 0, !rect.isEmpty else { return }
+        let canvasRect = PixelRect(x: 0, y: 0, width: width, height: height)
+        let blurBox = blurBounds.clamped(to: canvasRect)
+        guard !blurBox.isEmpty else { return }
+        let writeBox = blurBox.clamped(to: writeClip)
+        guard !writeBox.isEmpty else { return }
+        let radii = Self.gaussBoxRadii(sigma: radius * scale)
+        guard radii.0 > 0 || radii.1 > 0 || radii.2 > 0 else { return }
+        let bw = blurBox.width, bh = blurBox.height
+        var bufA = [Float](repeating: 0, count: bw * bh * 4)
+        var bufB = [Float](repeating: 0, count: bw * bh * 4)
+        for y in 0..<bh {
+            let srcRow = ((blurBox.y + y) * width + blurBox.x) * 4
+            let dstRow = y * bw * 4
+            for i in 0..<(bw * 4) { bufA[dstRow + i] = pixels[srcRow + i] }
+        }
+        for r in [radii.0, radii.1, radii.2] where r > 0 {
+            Self.boxBlurH(src: bufA, dst: &bufB, w: bw, h: bh, r: r)
+            Self.boxBlurV(src: bufB, dst: &bufA, w: bw, h: bh, r: r)
+        }
+        for y in writeBox.y..<(writeBox.y + writeBox.height) {
+            let maskRow = (y - clipMask.top) * clipMask.width - clipMask.left
+            let blurRow = (y - blurBox.y) * bw
+            for x in writeBox.x..<(writeBox.x + writeBox.width) {
+                let clipCov = clipMask.coverage[maskRow + x]
+                guard clipCov > 0 else { continue }
+                let dst = (y * width + x) * 4
+                let src = (blurRow + (x - blurBox.x)) * 4
+                if clipCov >= 1 {
+                    pixels[dst] = bufA[src]
+                    pixels[dst + 1] = bufA[src + 1]
+                    pixels[dst + 2] = bufA[src + 2]
+                    pixels[dst + 3] = bufA[src + 3]
+                } else {
+                    let k = 1 - clipCov
+                    pixels[dst] = pixels[dst] * k + bufA[src] * clipCov
+                    pixels[dst + 1] = pixels[dst + 1] * k + bufA[src + 1] * clipCov
+                    pixels[dst + 2] = pixels[dst + 2] * k + bufA[src + 2] * clipCov
+                    pixels[dst + 3] = pixels[dst + 3] * k + bufA[src + 3] * clipCov
+                }
+            }
+        }
     }
 
     /// Sets every pixel of `region` to `color`, as a new canvas with that background.

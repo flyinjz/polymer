@@ -487,9 +487,10 @@ struct ClipShapeView<Content: View, S: Shape>: View, PrimitiveView {
     func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
         let n = (existing as? ClipShapeNode) ?? ClipShapeNode()
         let shape = shape
-        n.clipRect = { rect in
-            let bounds = shape.path(in: rect).controlBounds
-            return bounds.isEmpty ? rect : bounds.intersection(rect)
+        if shape is Rectangle {
+            n.clipPath = nil
+        } else {
+            n.clipPath = { rect in shape.path(in: rect) }
         }
         n.containsPoint = { point, rect in
             guard rect.contains(point) else { return false }
@@ -515,7 +516,7 @@ struct ClipShapeView<Content: View, S: Shape>: View, PrimitiveView {
 }
 
 final class ClipShapeNode: Node {
-    var clipRect: (@MainActor (Rect) -> Rect)?
+    var clipPath: (@MainActor (Rect) -> Path)?
     var containsPoint: (@MainActor (Point, Rect) -> Bool)?
 
     override var clipsContent: Bool { true }
@@ -523,8 +524,11 @@ final class ClipShapeNode: Node {
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r) }
     override func draw(_ list: inout DisplayList) {
-        let rect = clipRect?(frame) ?? frame
-        list.clipped(to: rect) { c in children[0].draw(&c) }
+        if let path = clipPath?(frame) {
+            list.clipped(to: path) { c in children[0].draw(&c) }
+        } else {
+            list.clipped(to: frame) { c in children[0].draw(&c) }
+        }
     }
     override func hitTest(_ p: Point) -> Node? {
         guard containsPoint?(p, frame) ?? frame.contains(p) else { return nil }
