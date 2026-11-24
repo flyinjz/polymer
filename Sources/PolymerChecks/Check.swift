@@ -61,7 +61,7 @@ public struct Check {
 public enum Checks {
     /// Every check, grouped by module, in dependency order.
     public static var all: [Check] {
-        baseChecks + textChecks + renderChecks + uiChecks + editingAndGridChecks + appAndDesignChecks + audioAndGPUChecks
+        baseChecks + textChecks + textAdvancedChecks + renderChecks + uiChecks + editingAndGridChecks + appAndDesignChecks + audioAndGPUChecks + audioEngineChecks + platformAndGPUShaderChecks
     }
 
     /// Runs the checks whose name contains `filter`; returns the number that failed.

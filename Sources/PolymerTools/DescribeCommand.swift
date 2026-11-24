@@ -158,6 +158,7 @@ func describeCommand(section: String?, asJSON: Bool, root: String) {
 private let cliCommandDescriptions: [(name: String, usage: String, summary: String)] = [
     ("check", "polymer check [filter] [--list] [--verbose]", "Run headless verification checks across all modules."),
     ("render", "polymer render <screen> <out.png> [--scale N] [--click ...] [--click-id ...] [--right-click ...] [--right-click-id ...] [--scroll N] [--key K] [--hover ...] [--press ...]", "Render a screen to a PNG after applying input steps."),
+    ("preview", "polymer preview <screen> [--scale N]", "Open a screen in a live interactive native window (Windows/macOS)."),
     ("tree", "polymer tree <screen> [--a11y] [--click ...] [--click-id ...] [--right-click ...] [--right-click-id ...] [--scroll N] [--key K] [--hover ...] [--press ...]", "Print a screen's element tree (or accessibility tree with --a11y)."),
     ("describe", "polymer describe [modules|api|modifiers|tokens|commands|screens] [--json]", "Inspect Polymer's public types, View modifiers, theme tokens, and commands."),
     ("zoom", "polymer zoom <in.png> <out.png> x y w h factor", "Crop and nearest-neighbour enlarge a PNG region for pixel inspection."),

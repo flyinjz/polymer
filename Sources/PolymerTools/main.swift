@@ -7,12 +7,15 @@ import PolymerUI
 #if os(Windows)
 import PolymerPlatformWindows
 Platform.install(files: WindowsFileSystem(), process: WindowsProcess())
+Platform.installDesktop(windowRunner: WindowsWindowRunner(), clipboard: WindowsClipboard(), audioOutput: HeadlessAudioOutputBackend())
 #elseif os(macOS)
 import PolymerPlatformMac
 Platform.install(files: MacFileSystem(), process: MacProcess())
+Platform.installDesktop(windowRunner: MacWindowRunner(), clipboard: MacClipboard(), audioOutput: HeadlessAudioOutputBackend())
 #elseif os(Linux)
 import PolymerPlatformLinux
 Platform.install(files: LinuxFileSystem(), process: LinuxProcess())
+Platform.installDesktop(windowRunner: LinuxWindowRunner(), clipboard: LinuxClipboard(), audioOutput: HeadlessAudioOutputBackend())
 #endif
 
 let usage = """
@@ -22,6 +25,7 @@ let usage = """
       check [filter] [--list] [--verbose]    Run the headless checks (all, or names containing filter).
       render <screen> <out.png> [--scale N] [--click "text"] [--click-id "id"] [--right-click "text"] [--right-click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
                                              Render a screen to a PNG, headless.
+      preview <screen> [--scale N] [...]     Open a screen in a live interactive window (Windows/macOS).
       tree <screen> [--a11y] [--click "text"] [--click-id "id"] [--right-click "text"] [--right-click-id "id"] [--scroll N] [--key K] [--hover "text"] [--press "text"]...
                                              Print a screen's element tree (or accessibility tree with --a11y).
       describe [section] [--json]            Self-describing API, modifier, token, and command reference.
@@ -111,6 +115,14 @@ case "render":
         }
         let tree = try screenTree(screen, scale: scaleOption(), steps: steps)
         try Platform.files.write(PNG.encode(tree.render()), to: out)
+    } catch { print(error); Platform.process.exit(1) }
+case "preview":
+    do {
+        guard let screen = positional(1) else {
+            print("usage: polymer preview <screen> [--scale N]")
+            Platform.process.exit(2)
+        }
+        try previewCommand(screen: screen, scale: scaleOption(), steps: steps)
     } catch { print(error); Platform.process.exit(1) }
 case "tree":
     do {

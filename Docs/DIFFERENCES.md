@@ -34,7 +34,7 @@ deliberate difference is listed here, with the reason.
 | `Animation` driven by wall-clock frames | `Animation` + `withAnimation` + `.animation(_:value:)` stepped by `ViewTree.tick(_:)` | Deterministic across runs and OSes for headless checks; windows feed display-paced `dt` while `hasActiveAnimations` is true. |
 | `Image("name")` from asset catalogs | `Image(RenderImage)` / `Image(Bitmap)` | No asset catalogs or Foundation; images are decoded via `PNG.decode` / `RenderImage.png`. Supports `.resizable()`, `.interpolation(_:)`, `.aspectRatio(_:contentMode:)`. |
 | `.background(.ultraThinMaterial)` | `BackdropBlur(radius:)` composed with a tinted `Color` | Explicit dark glass building block; design-system glass tokens come with PolymerDesign. |
-| Lines break by Unicode rules | Lines break after spaces and hyphens | Full UAX #14 comes later. |
+| Lines break by full ICU Unicode rules | Pure-Swift UAX #14 `UnicodeLineBreak` (NBSP/WJ glue, hyphen vs `-42`, punctuation, CJK/ideographic breaks, ZWSP) | Stdlib-only and identical across OSes; full complex-script shaping (Arabic/Indic) awaits optional HarfBuzz adapter. |
 | `.truncationMode(.head / .middle / .tail)` | Text is always cut at the end | Cut by `lineLimit` or by a height too short for its lines (at least one line is shown, as in SwiftUI). Other modes come when a screen needs them. |
 | Buttons focusable only with full keyboard access (macOS) | Buttons always take focus from Tab, never from a click | One behaviour on every OS. Space and Return press a focused button. |
 | `.onKeyPress(characters:)`, `.focusSection()`, `.defaultFocus`, `.focusedValue` | Not yet | `.focusable()`, `@FocusState`, `.focused(...)` and `.onKeyPress(_:)`, `(keys:)`, `(phases:)` exist. |
