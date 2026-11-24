@@ -188,12 +188,11 @@ public struct PolymerToggle: View {
     }
 
     public var body: some View {
-        let trackW = 32.0 * customizeScale
-        let trackH = 18.0 * customizeScale
-        let thumbSize = 12.0 * customizeScale
+        let trackW = 36.0 * customizeScale
+        let trackH = 20.0 * customizeScale
+        let thumbSize = 14.0 * customizeScale
         let inset = (trackH - thumbSize) / 2
-        let trackRadius = theme.radii.pill > 0 ? trackH / 2 : 0
-        let thumbRadius = theme.radii.pill > 0 ? thumbSize / 2 : 0
+        let bw = theme.borders.borderWidth
 
         let trackFill: Color = {
             if !isEnabled { return theme.colors.surface }
@@ -209,22 +208,18 @@ public struct PolymerToggle: View {
             return isOn ? theme.colors.accentText : theme.colors.textPrimary
         }()
 
-        let bw = theme.borders.borderWidth
         Button(action: { isOn.toggle() }) {
             HStack(spacing: theme.spacing.sm * customizeScale) {
                 ZStack(alignment: isOn ? .trailing : .leading) {
-                    if trackRadius > 0 {
-                        ThemedSurfaceFill(color: trackBorder, cornerRadius: trackRadius)
-                            .frame(width: trackW, height: trackH)
-                        ThemedSurfaceFill(color: trackFill, cornerRadius: max(0, trackRadius - bw))
-                            .frame(width: max(0, trackW - 2 * bw), height: max(0, trackH - 2 * bw))
-                            .padding(bw)
-                    } else {
-                        ThemedSurfaceFill(color: trackFill, cornerRadius: 0)
-                            .frame(width: trackW, height: trackH)
-                            .border(trackBorder, width: bw)
-                    }
-                    ThemedSurfaceFill(color: thumbFill, cornerRadius: thumbRadius)
+                    Capsule()
+                        .foregroundStyle(trackBorder)
+                        .frame(width: trackW, height: trackH)
+                    Capsule()
+                        .foregroundStyle(trackFill)
+                        .frame(width: max(0, trackW - 2 * bw), height: max(0, trackH - 2 * bw))
+                        .padding(bw)
+                    Circle()
+                        .foregroundStyle(thumbFill)
                         .frame(width: thumbSize, height: thumbSize)
                         .padding(horizontal: inset)
                 }
@@ -257,6 +252,7 @@ public struct PolymerSlider: View {
     @Environment(\.customizeScale) private var customizeScale
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
+    @State private var dragStartValue: Double? = nil
 
     public init(
         value: Binding<Double>,
@@ -353,6 +349,19 @@ public struct PolymerSlider: View {
             }
         }
         .frame(width: width, height: controlH, alignment: .leading)
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { drag in
+                    guard isEnabled else { return }
+                    let base = dragStartValue ?? value
+                    if dragStartValue == nil { dragStartValue = base }
+                    let delta = (drag.translation.width / max(1, width)) * span
+                    setClamped(base + delta)
+                }
+                .onEnded { _ in
+                    dragStartValue = nil
+                }
+        )
         .focusable()
         .focused($isFocused)
         .focusRing(isFocused: isFocused)
