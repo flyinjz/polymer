@@ -37,6 +37,7 @@ private final class DesignShowcaseModel {
     var volume = 0.65
     var query = "Polymer"
     var status = "Ready"
+    var selectedMode = "Grid"
 
     var activeTheme: Theme {
         switch themeIndex % 3 {
@@ -70,6 +71,7 @@ private struct DesignShowcaseView: View {
             HStack(spacing: theme.spacing.sm) {
                 Text("Workspace")
                     .accessibilityIdentifier("workspace.title")
+                PolymerBadge(theme.name, tone: .accent)
                 Spacer()
                 Text(model.status)
                     .foregroundStyle(theme.colors.textSecondary)
@@ -77,10 +79,20 @@ private struct DesignShowcaseView: View {
             HairlineDivider()
             PolymerPanel {
                 VStack(alignment: .leading, spacing: theme.spacing.sm) {
-                    TextField("Search", text: Binding(get: { model.query }, set: { model.query = $0 }))
+                    PolymerTextField("Search", text: Binding(get: { model.query }, set: { model.query = $0 }))
                         .accessibilityIdentifier("workspace.search")
-                    PolymerToggle("Notifications", isOn: Binding(get: { model.notificationsOn }, set: { model.notificationsOn = $0 }))
-                    PolymerSlider(value: Binding(get: { model.volume }, set: { model.volume = $0 }), in: 0...1)
+                    HStack(spacing: theme.spacing.md) {
+                        PolymerToggle("Notifications", isOn: Binding(get: { model.notificationsOn }, set: { model.notificationsOn = $0 }))
+                            .layoutPriority(1)
+                        Spacer()
+                        PolymerSegmentedControl(
+                            options: [("Grid", "Grid"), ("List", "List"), ("Compact", "Compact")],
+                            selection: Binding(get: { model.selectedMode }, set: { model.selectedMode = $0 })
+                        )
+                        .layoutPriority(1)
+                    }
+                    PolymerSlider(value: Binding(get: { model.volume }, set: { model.volume = $0 }), in: 0...1, width: 220)
+                    PolymerProgressBar(value: model.volume, label: "Level", showsPercentage: true)
                     HStack(spacing: theme.spacing.sm) {
                         Button("Cycle Theme") { model.cycleTheme() }
                             .buttonStyle(.polymerPrimary)
@@ -95,7 +107,7 @@ private struct DesignShowcaseView: View {
             }
         }
         .padding(theme.spacing.md)
-        .frame(width: 420, height: 280, alignment: .topLeading)
+        .frame(width: 480, height: 340, alignment: .topLeading)
         .background(theme.colors.background)
         .font(font)
         .theme(theme)

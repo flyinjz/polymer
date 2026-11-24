@@ -7,11 +7,11 @@ import PolymerUI
 #if os(Windows)
 import PolymerPlatformWindows
 Platform.install(files: WindowsFileSystem(), process: WindowsProcess())
-Platform.installDesktop(windowRunner: WindowsWindowRunner(), clipboard: WindowsClipboard(), audioOutput: HeadlessAudioOutputBackend())
+Platform.installDesktop(windowRunner: WindowsWindowRunner(), clipboard: WindowsClipboard(), audioOutput: WindowsAudioOutputBackend())
 #elseif os(macOS)
 import PolymerPlatformMac
 Platform.install(files: MacFileSystem(), process: MacProcess())
-Platform.installDesktop(windowRunner: MacWindowRunner(), clipboard: MacClipboard(), audioOutput: HeadlessAudioOutputBackend())
+Platform.installDesktop(windowRunner: MacWindowRunner(), clipboard: MacClipboard(), audioOutput: MacAudioOutputBackend())
 #elseif os(Linux)
 import PolymerPlatformLinux
 Platform.install(files: LinuxFileSystem(), process: LinuxProcess())
