@@ -29,7 +29,9 @@ public enum PlatformKey: Sendable, Hashable {
 public enum WindowEvent: Sendable, Equatable {
     /// Positions are in points from the top-left of the content.
     case pointerMoved(Point)
-    case pointerDown(Point, PointerButton)
+    /// `clickCount` is 2 for a double click, 3 for a triple click (the OS's
+    /// interval and distance), and so on.
+    case pointerDown(Point, PointerButton, clickCount: Int = 1)
     case pointerUp(Point, PointerButton)
     /// The pointer left the content.
     case pointerExited
@@ -38,6 +40,14 @@ public enum WindowEvent: Sendable, Equatable {
     /// A key went down (`isRepeat` when held). `characters` is what it types, if anything.
     case keyDown(PlatformKey, characters: String, modifiers: KeyModifiers, isRepeat: Bool)
     case keyUp(PlatformKey, modifiers: KeyModifiers)
+    /// Text typed (after dead keys and AltGr) or confirmed by an input method,
+    /// never control characters. A key that types text sends its `keyDown`
+    /// first; while a text input has focus the host gives the tree only this,
+    /// so nothing is inserted twice.
+    case text(String)
+    /// An input method's text in progress, replacing the previous; `selectedRange`
+    /// is its caret or selection, in characters. Empty ends it without inserting.
+    case markedText(String, selectedRange: Range<Int>)
     /// The content's size in pixels or its scale (pixels per point) changed.
     case resized(width: Int, height: Int, scale: Double)
     /// The user asked to close the window (the close button, Alt-F4).
@@ -66,6 +76,11 @@ public protocol PlatformWindow: AnyObject, Sendable {
     var delegate: WindowDelegate? { get set }
     func show()
     func close()
+    /// Where text input goes. Nil turns the input method off (the focused view
+    /// takes no text); otherwise the caret's or marked text's rectangle in
+    /// points, where the input method puts its candidates. Called often with
+    /// the same value: windows act only on changes.
+    func setTextInput(_ caret: Rect?)
     /// Asks for a frame soon. Safe from any thread (view invalidation calls it).
     nonisolated func setNeedsFrame()
 }

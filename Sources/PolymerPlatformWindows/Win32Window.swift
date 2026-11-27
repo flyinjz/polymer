@@ -18,10 +18,123 @@ enum Win32Input {
 
     static func scale(dpi: UInt32) -> Double { dpi == 0 ? 1 : Double(dpi) / 96 }
 
-    /// Client-area position in an LPARAM (signed: captured drags can go negative), in points.
+    /// Client-area position in an LPARAM (signed: captured drags can go negative), in pixels.
+    static func pixels(_ lParam: Int) -> (x: Int, y: Int) {
+        (Int(Int16(truncatingIfNeeded: lParam & 0xffff)), Int(Int16(truncatingIfNeeded: (lParam >> 16) & 0xffff)))
+    }
+
+    /// Client-area position in an LPARAM, in points.
     static func point(_ lParam: Int, scale: Double) -> Point {
-        let x = Int16(truncatingIfNeeded: lParam & 0xffff), y = Int16(truncatingIfNeeded: (lParam >> 16) & 0xffff)
+        let (x, y) = pixels(lParam)
         return Point(x: Double(x) / scale, y: Double(y) / scale)
+    }
+
+    /// A press, remembered to count the clicks of the next one.
+    struct Click: Equatable {
+        var button: PointerButton
+        var x: Int, y: Int
+        /// Message time in milliseconds (wraps around).
+        var time: UInt32
+        var count: Int
+    }
+
+    /// A press at pixel (x, y): one more click than `last` when it is the same
+    /// button within `interval` ms and inside the double-click rectangle
+    /// (`width` x `height` pixels, centred on the last press), else one.
+    static func click(after last: Click?, button: PointerButton, x: Int, y: Int, time: UInt32,
+                      interval: UInt32, width: Int, height: Int) -> Click {
+        var count = 1
+        if let l = last, l.button == button, time &- l.time <= interval,
+           abs(x - l.x) <= width / 2, abs(y - l.y) <= height / 2 {
+            count = l.count + 1
+        }
+        return Click(button: button, x: x, y: y, time: time, count: count)
+    }
+
+    /// The text in a WM_CHAR unit, or nil: control characters (they come as
+    /// keys) and the first half of a surrogate pair (kept in `pendingHigh`).
+    static func character(_ unit: UInt16, pendingHigh: inout UInt16?) -> String? {
+        switch unit {
+        case 0xD800...0xDBFF:
+            pendingHigh = unit
+            return nil
+        case 0xDC00...0xDFFF:
+            guard let h = pendingHigh else { return nil }
+            pendingHigh = nil
+            let v = 0x10000 + ((UInt32(h) - 0xD800) << 10) + (UInt32(unit) - 0xDC00)
+            return Unicode.Scalar(v).map { String(Character($0)) }
+        default:
+            pendingHigh = nil
+            guard unit >= 0x20, unit != 0x7F, let s = Unicode.Scalar(unit) else { return nil }
+            return String(Character(s))
+        }
+    }
+
+    /// The text in a WM_UNICHAR (a UTF-32 scalar), or nil for control characters and invalid values.
+    static func unichar(_ wParam: UInt) -> String? {
+        guard wParam >= 0x20, wParam != 0x7F, wParam <= 0x10FFFF, let s = Unicode.Scalar(UInt32(wParam)) else { return nil }
+        return String(Character(s))
+    }
+
+    /// Keys that only carry text: VK_PROCESSKEY (the input method has the key) and VK_PACKET (injected text).
+    static func isTextOnlyKey(_ vk: Int) -> Bool { vk == 0xE5 || vk == 0xE7 }
+
+    /// The number of whole characters in the first `offset` UTF-16 units of `units`.
+    static func characterOffset(_ units: [UInt16], utf16 offset: Int) -> Int {
+        var n = 0, u = 0
+        for ch in String(decoding: units, as: UTF16.self) {
+            let w = ch.utf16.count
+            if u + w > offset { break }
+            u += w; n += 1
+        }
+        return n
+    }
+
+    /// An input method's composition as marked text: its characters, and the
+    /// clause being converted (attributes 1 and 3, one byte per UTF-16 unit)
+    /// as the selection, else the caret at `cursor` (UTF-16), all in characters.
+    static func marked(_ units: [UInt16], cursor: Int, attributes: [UInt8]) -> (String, Range<Int>) {
+        let text = String(decoding: units, as: UTF16.self)
+        let isTarget: (UInt8) -> Bool = { $0 == 1 || $0 == 3 }   // ATTR_TARGET_CONVERTED, ATTR_TARGET_NOTCONVERTED
+        if let a = attributes.firstIndex(where: isTarget), let b = attributes.lastIndex(where: isTarget) {
+            return (text, characterOffset(units, utf16: a)..<characterOffset(units, utf16: b + 1))
+        }
+        let c = characterOffset(units, utf16: min(max(cursor, 0), units.count))
+        return (text, c..<c)
+    }
+
+    /// A rectangle in points as the pixels covering it.
+    static func pixelRect(_ r: Rect, scale: Double) -> PixelRect {
+        let x = Int((r.minX * scale).rounded(.down)), y = Int((r.minY * scale).rounded(.down))
+        let x1 = Int((r.maxX * scale).rounded(.up)), y1 = Int((r.maxY * scale).rounded(.up))
+        return PixelRect(x: x, y: y, width: max(0, x1 - x), height: max(0, y1 - y))
+    }
+
+    /// Text for the clipboard: CRLF line breaks, ending in NUL.
+    static func clipboardUnits(_ s: String) -> [UInt16] {
+        var out: [UInt16] = []
+        out.reserveCapacity(s.utf16.count + 1)
+        var afterCR = false
+        for u in s.utf16 {
+            if u == 0x0A, !afterCR { out.append(0x0D) }
+            out.append(u)
+            afterCR = u == 0x0D
+        }
+        out.append(0)
+        return out
+    }
+
+    /// Text from the clipboard, up to its NUL, with CRLF and CR as "\n".
+    static func clipboardText<S: Sequence>(_ units: S) -> String where S.Element == UInt16 {
+        var out: [UInt16] = []
+        var afterCR = false
+        for u in units {
+            if u == 0 { break }
+            if u == 0x0A, afterCR { afterCR = false; continue }
+            afterCR = u == 0x0D
+            out.append(afterCR ? 0x0A : u)
+        }
+        return String(decoding: out, as: UTF16.self)
     }
 
     /// Wheel notches in a WPARAM (positive: away from the user).
@@ -190,6 +303,45 @@ public final class Win32WindowSystem: WindowSystem {
         expect(Win32Input.key(0xBA, characters: "ö") == .character("ö"), "layout characters")
         expect(Win32Input.key(0x70, characters: "") == .other(0x70), "keys without characters keep their code")
         expect(Win32Input.key(0x26, characters: "") == .up && Win32Input.key(0x2E, characters: "") == .delete, "arrows and delete")
+        expect(Win32Input.event(0x0204, 0, lp, scale: 2, toClient: noClient) == .pointerDown(Point(x: 150, y: -3), .secondary), "right button down")
+        let px = Win32Input.pixels(lp)
+        expect(px.x == 300 && px.y == -6, "client position in pixels, signed")
+
+        // Click counting: same button, within the time and the rectangle (4 x 4 here: 2 either way).
+        let first = Win32Input.click(after: nil, button: .primary, x: 10, y: 10, time: 1000, interval: 500, width: 4, height: 4)
+        let second = Win32Input.click(after: first, button: .primary, x: 12, y: 9, time: 1400, interval: 500, width: 4, height: 4)
+        let third = Win32Input.click(after: second, button: .primary, x: 12, y: 9, time: 1800, interval: 500, width: 4, height: 4)
+        expect(first.count == 1 && second.count == 2 && third.count == 3, "double and triple clicks")
+        expect(Win32Input.click(after: second, button: .primary, x: 12, y: 9, time: 1901, interval: 500, width: 4, height: 4).count == 1, "too slow starts again")
+        expect(Win32Input.click(after: second, button: .primary, x: 15, y: 9, time: 1500, interval: 500, width: 4, height: 4).count == 1, "too far starts again")
+        expect(Win32Input.click(after: second, button: .secondary, x: 12, y: 9, time: 1500, interval: 500, width: 4, height: 4).count == 1, "another button starts again")
+        let late = Win32Input.Click(button: .primary, x: 0, y: 0, time: UInt32.max - 100, count: 1)
+        expect(Win32Input.click(after: late, button: .primary, x: 0, y: 0, time: 200, interval: 500, width: 4, height: 4).count == 2, "message time wraps around")
+
+        // WM_CHAR and WM_UNICHAR text.
+        var high: UInt16?
+        expect(Win32Input.character(0x41, pendingHigh: &high) == "A" && Win32Input.character(0xE9, pendingHigh: &high) == "é", "characters")
+        expect(Win32Input.character(0x08, pendingHigh: &high) == nil && Win32Input.character(0x0D, pendingHigh: &high) == nil
+               && Win32Input.character(0x7F, pendingHigh: &high) == nil, "control characters come as keys")
+        let firstHalf = Win32Input.character(0xD83D, pendingHigh: &high)
+        let secondHalf = Win32Input.character(0xDE00, pendingHigh: &high)
+        expect(firstHalf == nil && secondHalf == "\u{1F600}" && high == nil, "a surrogate pair is one character")
+        expect(Win32Input.character(0xDE00, pendingHigh: &high) == nil, "a lone low surrogate is dropped")
+        expect(Win32Input.unichar(0x1F600) == "\u{1F600}" && Win32Input.unichar(0x0D) == nil && Win32Input.unichar(0x110000) == nil, "WM_UNICHAR")
+        expect(Win32Input.isTextOnlyKey(0xE5) && Win32Input.isTextOnlyKey(0xE7) && !Win32Input.isTextOnlyKey(0x41), "input method and packet keys")
+
+        // Input method compositions, in characters (the emoji is two UTF-16 units).
+        let comp = Array("a\u{1F600}bc".utf16)
+        expect(Win32Input.characterOffset(comp, utf16: 3) == 2 && Win32Input.characterOffset(comp, utf16: 2) == 1, "UTF-16 offsets as characters")
+        let (mt, sel) = Win32Input.marked(comp, cursor: 3, attributes: [0, 1, 1, 1, 2])
+        expect(mt == "a\u{1F600}bc" && sel == 1..<3, "the converting clause is the selection")
+        expect(Win32Input.marked(comp, cursor: 3, attributes: []).1 == 2..<2, "else the cursor")
+        expect(Win32Input.marked(comp, cursor: 99, attributes: [0, 0, 0, 0, 0]).1 == 4..<4, "the cursor is clamped")
+        expect(Win32Input.pixelRect(Rect(x: 10.25, y: 4, width: 1, height: 15.5), scale: 2) == PixelRect(x: 20, y: 8, width: 3, height: 31), "caret pixels cover the rectangle")
+
+        // Clipboard text: CRLF there, "\n" here.
+        expect(Win32Input.clipboardUnits("a\nb\r\nc") == Array("a\r\nb\r\nc".utf16) + [0], "copied line breaks are CRLF, ending in NUL")
+        expect(Win32Input.clipboardText(Array("a\r\nb\rc\nd".utf16) + [0, 0x41]) == "a\nb\nc\nd", "pasted line breaks are \\n, up to the NUL")
         return failures
     }
 }
@@ -206,6 +358,16 @@ public final class Win32Window: PlatformWindow {
     var animating = false
     var trackingLeave = false
     let wake: UInt
+    /// The last press, to count double and triple clicks.
+    var lastClick: Win32Input.Click?
+    /// The first half of a character outside the BMP, until WM_CHAR brings the second.
+    var pendingHighSurrogate: UInt16?
+    /// Where text goes, in client pixels; nil while the focused view takes no text.
+    var textInput: PixelRect?
+    /// Whether the input method is associated with the window (on until init turns it off).
+    var imeOn = true
+    /// An input method composition is shown as marked text.
+    var hasMarkedText = false
 
     init(_ hwnd: HWND, system: Win32WindowSystem, title: String) {
         self.hwnd = hwnd
@@ -214,6 +376,87 @@ public final class Win32Window: PlatformWindow {
         wake = system.wake
         scale = Win32Input.scale(dpi: GetDpiForWindow(hwnd))
         updateSize()
+        setIME(false)   // until a text field takes focus
+    }
+
+    public func setTextInput(_ caret: Rect?) {
+        let r = caret.map { Win32Input.pixelRect($0, scale: scale) }
+        guard r != textInput || (r != nil) != imeOn else { return }
+        textInput = r
+        setIME(r != nil)
+        if r != nil { placeIME() }
+    }
+
+    /// Associates the input method with the window, or removes it (cancelling a composition).
+    func setIME(_ on: Bool) {
+        guard on != imeOn else { return }
+        imeOn = on
+        if !on, hasMarkedText, let himc = ImmGetContext(hwnd) {
+            _ = ImmNotifyIME(himc, 0x15, 0x4, 0)   // NI_COMPOSITIONSTR, CPS_CANCEL
+            _ = ImmReleaseContext(hwnd, himc)
+        }
+        hasMarkedText = false
+        _ = ImmAssociateContextEx(hwnd, nil, on ? 0x10 : 0)   // IACE_DEFAULT, or no context
+    }
+
+    /// Puts the input method's composition at the caret and its candidates below, never over the text.
+    func placeIME() {
+        guard let r = textInput, let himc = ImmGetContext(hwnd) else { return }
+        defer { _ = ImmReleaseContext(hwnd, himc) }
+        let area = RECT(left: Int32(r.x), top: Int32(r.y), right: Int32(r.x + r.width), bottom: Int32(r.y + r.height))
+        var cf = COMPOSITIONFORM()
+        cf.dwStyle = 0x0002   // CFS_POINT
+        cf.ptCurrentPos = POINT(x: area.left, y: area.top)
+        cf.rcArea = area
+        _ = ImmSetCompositionWindow(himc, &cf)
+        var cand = CANDIDATEFORM()
+        cand.dwIndex = 0
+        cand.dwStyle = 0x0080   // CFS_EXCLUDE: anywhere but over `rcArea`
+        cand.ptCurrentPos = POINT(x: area.left, y: area.bottom)
+        cand.rcArea = area
+        _ = ImmSetCandidateWindow(himc, &cand)
+    }
+
+    /// The composition string `kind` (GCS_*) as UTF-16 units, or attribute bytes.
+    func compositionBytes(_ himc: HIMC, _ kind: UInt32) -> [UInt8] {
+        let n = Int(ImmGetCompositionStringW(himc, kind, nil, 0))
+        guard n > 0 else { return [] }
+        var bytes = [UInt8](repeating: 0, count: n)
+        let got = bytes.withUnsafeMutableBytes { Int(ImmGetCompositionStringW(himc, kind, $0.baseAddress, UInt32(n))) }
+        return got > 0 ? Array(bytes[0..<min(got, n)]) : []
+    }
+
+    func compositionUnits(_ himc: HIMC, _ kind: UInt32) -> [UInt16] {
+        let b = compositionBytes(himc, kind)
+        return stride(from: 0, to: b.count - 1, by: 2).map { UInt16(b[$0]) | UInt16(b[$0 + 1]) << 8 }
+    }
+
+    /// WM_IME_COMPOSITION: the confirmed text goes in as `.text`, the text in progress as `.markedText`.
+    func composition(_ flags: Int) {
+        guard let himc = ImmGetContext(hwnd) else { return }
+        defer { _ = ImmReleaseContext(hwnd, himc) }
+        if flags & 0x0800 != 0 {   // GCS_RESULTSTR
+            let result = compositionUnits(himc, 0x0800)
+            if !result.isEmpty {
+                hasMarkedText = false
+                delegate?.handle(.text(String(decoding: result, as: UTF16.self)))
+            }
+        }
+        if flags & 0x0008 != 0 {   // GCS_COMPSTR
+            let units = compositionUnits(himc, 0x0008)
+            let attributes = flags & 0x0010 != 0 ? compositionBytes(himc, 0x0010) : []   // GCS_COMPATTR
+            let cursor = flags & 0x0080 != 0 ? Int(ImmGetCompositionStringW(himc, 0x0080, nil, 0)) : units.count   // GCS_CURSORPOS
+            let (text, selected) = Win32Input.marked(units, cursor: cursor, attributes: attributes)
+            if !text.isEmpty || hasMarkedText {
+                hasMarkedText = !text.isEmpty
+                delegate?.handle(.markedText(text, selectedRange: selected))
+            }
+        } else if flags & 0x0800 == 0, hasMarkedText {
+            // Neither: the composition was cancelled.
+            hasMarkedText = false
+            delegate?.handle(.markedText("", selectedRange: 0..<0))
+        }
+        // The delegate moves the candidates with the marked text (`setTextInput`).
     }
 
     public var nativeHandle: UInt { UInt(bitPattern: hwnd) }
@@ -277,6 +520,8 @@ public final class Win32Window: PlatformWindow {
             return 0
         case 0x0100, 0x0104, 0x0101, 0x0105:   // key down / up (also with Alt)
             let vk = Int(wParam)
+            // The input method's keys and injected text arrive as text, not as keys.
+            if Win32Input.isTextOnlyKey(vk) { return nil }
             let mods = Self.modifiers()
             if message == 0x0100 || message == 0x0104 {
                 let chars = Self.characters(vk: UInt32(vk), scanCode: UInt32((lParam >> 16) & 0xff))
@@ -287,10 +532,32 @@ public final class Win32Window: PlatformWindow {
             }
             // Alt combinations still reach the system (Alt-F4, the window menu).
             return message == 0x0104 || message == 0x0105 ? nil : 0
-        case 0x0102: return 0   // WM_CHAR: characters come with the key down
+        case 0x0102:   // WM_CHAR: text after dead keys and AltGr (control characters come as keys)
+            if let s = Win32Input.character(UInt16(truncatingIfNeeded: wParam), pendingHigh: &pendingHighSurrogate) {
+                delegate?.handle(.text(s))
+            }
+            return 0
+        case 0x0109:   // WM_UNICHAR
+            if wParam == 0xFFFF { return 1 }   // UNICODE_NOCHAR: asks whether the window takes it
+            if let s = Win32Input.unichar(wParam) { delegate?.handle(.text(s)) }
+            return 0
+        case 0x010D:   // WM_IME_STARTCOMPOSITION: no system composition window, the text field shows it
+            placeIME()
+            return 0
+        case 0x010F:   // WM_IME_COMPOSITION, read here (DefWindowProc would send the result again as WM_CHAR)
+            composition(lParam)
+            return 0
+        case 0x010E:   // WM_IME_ENDCOMPOSITION
+            if hasMarkedText {
+                hasMarkedText = false
+                delegate?.handle(.markedText("", selectedRange: 0..<0))
+            }
+            return 0
+        case 0x0281:   // WM_IME_SETCONTEXT: the candidates stay, the composition window goes (marked text shows it)
+            return Int(DefWindowProcW(hwnd, message, WPARAM(wParam), LPARAM(lParam & ~0x8000_0000)))   // ISC_SHOWUICOMPOSITIONWINDOW
         default:
             let hwnd = self.hwnd
-            guard let event = Win32Input.event(message, wParam, lParam, scale: scale, toClient: { x, y in
+            guard var event = Win32Input.event(message, wParam, lParam, scale: scale, toClient: { x, y in
                 var p = POINT(x: Int32(x), y: Int32(y))
                 ScreenToClient(hwnd, &p)
                 return (Int(p.x), Int(p.y))
@@ -302,8 +569,17 @@ public final class Win32Window: PlatformWindow {
                     trackingLeave = TrackMouseEvent(&t)
                 }
             case .pointerExited: trackingLeave = false
-            case .pointerDown: SetCapture(hwnd)
-            case .pointerUp: ReleaseCapture()
+            case .pointerDown(let p, let button, _):
+                SetCapture(hwnd)
+                // Counted here, with the system's double-click time and rectangle (the class has no CS_DBLCLKS).
+                let (x, y) = Win32Input.pixels(lParam), dpi = GetDpiForWindow(hwnd)
+                let c = Win32Input.click(after: lastClick, button: button, x: x, y: y,
+                                         time: UInt32(bitPattern: GetMessageTime()), interval: GetDoubleClickTime(),
+                                         width: Int(GetSystemMetricsForDpi(36, dpi)), height: Int(GetSystemMetricsForDpi(37, dpi)))   // SM_CXDOUBLECLK, SM_CYDOUBLECLK
+                lastClick = c
+                event = .pointerDown(p, button, clickCount: c.count)
+            case .pointerUp:
+                if wParam & 0x13 == 0 { ReleaseCapture() }   // no MK_LBUTTON, MK_RBUTTON or MK_MBUTTON left down
             default: break
             }
             delegate?.handle(event)
