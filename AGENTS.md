@@ -69,3 +69,10 @@ menus (from the command system) and Customize (style, scale, move, hide).
   `Tools/Reference/coretext_reference.swift`; `manifest.json` gives font,
   size, scale, colours, origin and baseline for each). Polymer's output
   for the same inputs must match them closely on every OS.
+- **Tell the owner what you did.** After each piece of work, run
+  `polymer log "one plain sentence"` (name yourself with `--by` or
+  `POLYMER_AGENT`); it adds a line to `Docs/ACTIVITY.md`, which is never
+  edited by hand. When something is done, started or waiting for the
+  owner, update `Docs/status.json` and run `polymer status --write`. Both
+  are for the owner: plain words, no code names. Building an app on
+  Polymer: `Docs/AGENT_GUIDE.md`.

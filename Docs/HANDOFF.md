@@ -2,10 +2,70 @@
 
 Current state of the work. Every session updates this before it ends.
 
-## State (2026-11-14, Windows session 4)
+## State (2026-11-26, Windows session 7)
 
+- **Committed & signed on `main`** (GPG key `8FDBF5E546CF3D68` unlocked on this PC). No push until the owner says so.
+- Debug and release both build cleanly with zero warnings; `polymer check`
+  passes **97 checks**, and **8 tool checks** pass (2026-11-26).
+- CoreText parity unchanged: mean **1.122 / 255** over 128 images, worst **1.930**.
+- Release `polymer bench --frames 20` (720x480, 13 rows / 34 items):
+  `layout+record` p50 **0.03 ms** (max 0.04 ms), software `raster` p50 **8.68 ms** (max 9.32 ms).
+
+### Session 7 (2026-11-26)
+
+**Branch reconciliation (local base + selective `origin/main` ports).** Kept
+local `main` + Session 6 (hardware D3D12, Liquid Glass, JPEG scaled IDCT/EXIF,
+Win32 IME/clipboard, `Presentation`) and ported `origin/main` shared-module
+wins:
+- **PolymerText:** `GDEF`, `UnicodeLineBreak` (UAX #14), `FontFallback`,
+  `VariableFont`, `ColorEmoji` (COLR/CPAL) + `TextExtrasChecks` (5 checks),
+  plus configurable `GlyphCache.subpixelSteps` (default `0` exact; `4` for
+  1/4-px motion caching, checked by `text.glyphCache.quantization`).
+- **PolymerAudio:** `DecodedAudio`, `AIFF` (`AIFFDecoder`/`AIFFEncoder`/
+  `AIFFSource`, fixed 8-bit signed PCM), `ALAC` (`ALACDecoder`/`ALACEncoder`/
+  `ALACSource`), `DSP` (64-bit EQ, BS.1770 `LoudnessMeter`, `TruePeakMeter`,
+  `TruePeakLimiter`, `Crossfader`, `Crossfeed`, TPDF `Dither`),
+  `ExtraMetadata` (`MP4Metadata` with Latin-1 fourCC + big-endian `trkn`/`disk`
+  fixes, ReplayGain) + `AudioExtrasChecks` (13 checks).
+
+**PolymerUI, WindowHost & PolymerDesign.**
+- `ViewTree.record(background:)` returns `(DisplayList, [PixelRect])` without
+  CPU rasterization; `WindowHost.record()` now uses it directly.
+- Fixed `TextField` Ctrl+Y redo, escaped `\n`/`\r`/`\"` in `TextNode.detail`,
+  blocked text input while a menu is open, added `keyboardShortcut(_:)`
+  overload, `.allowsHitTesting`, `.onDisappear`, `PointerStyle` +
+  `ViewTree.pointerStyle(at:)`, `openContextMenuForFocused()`.
+- Wired `PanelLook` and `TextInputLook` into `designRoot` from `Theme` tokens;
+  added `ScrollViewReader`/`ScrollViewProxy` (with `laidOutFrame` for
+  passthrough `.id(...)` nodes) wired to `PScrollBar(proxy)`; synchronous
+  `CommandRegistry` unregistration via `.onDisappear`; `CustomizeModel` custom
+  `width`/`height` JSON persistence; verified `Spacer(minLength:)` and
+  sheet no-auto-focus (`design.theme.looks`, `design.commands.unmount`,
+  `design.scroll.reader`, `design.spacer.minLength`, `design.customize.size`,
+  `ui.sheet.noAutoFocus` / `presentation.sheet.noAutoFocus`).
+
+**Tooling & DESIGN 11.4 QA.**
+- Added `polymer diff <a.png> <b.png> [--out] [--threshold]`,
+  `polymer bench [--frames] [--width] [--height]`, `--customize <file.json>`
+  on `render`/`describe`, `check-tools`, updated `Help.swift`, and added
+  `tools.diff` + `tools.bench`.
+- Added `design.glassContrast` (`GlassContrastChecks.swift`): enforces WCAG
+  AA (>= 4.5:1) over bright, dark, and striped backdrops. Dark glass measures
+  9.0–16.4:1, dark material 6.1–16.4:1, light glass 10.6–17.0:1. Caught that
+  `Material` presets are currently dark-tinted (low contrast in light mode;
+  logged as a note pending light-mode Material presets).
+
+---
+
+## State (2026-11-22, Windows session 6)
+
+- **Nothing from late session 5 or session 6 is committed.** GPG signing
+  fails (no cached passphrase). Owner: cache it (PowerShell line below),
+  then commit. No push until the owner says so.
+- Debug and release both build; `polymer check` passes 70 checks, and the
+  6 tool checks pass (2026-11-22).
 - Design signed off: `Docs/DESIGN.md`. Differences from SwiftUI:
-  `Docs/DIFFERENCES.md`.
+  `Docs/DIFFERENCES.md`. Agents building apps: `Docs/AGENT_GUIDE.md`.
 - Committed, not pushed until the owner says so: sessions 1 to 4. The
   session 4 backlog (JPEG, Image, grids, DESIGN 11, shapes and effects,
   layers, glass container, glass sample, animation) was committed as
@@ -18,8 +78,78 @@ Current state of the work. Every session updates this before it ends.
   `echo x | gpg --pinentry-mode error --clearsign -u 8FDBF5E546CF3D68`.
   If it fails, ask the owner to run (PowerShell)
   `"x" | & "C:\Program Files\GnuPG\bin\gpg.exe" --clearsign -u 8FDBF5E546CF3D68 | Out-Null`.
-- Builds with `swift build` (debug and release) on Windows; `polymer check`
-  passes (36 checks: base, text, render, ui, effects).
+### Session 6 (2026-11-22)
+
+**Window input.** `WindowEvent` pointer presses carry `clickCount`; new
+`.text` and `.markedText` events; IME through Imm32 in the Win32 backend.
+`Clipboard` moved to PolymerPlatform (`Win32Clipboard` in the Windows
+backend). The host drops key presses that type text while a text input is
+focused (the text arrives as `.text`). Context menus open on press, as on
+macOS.
+
+**Tooling.** `polymer status`, `log`, `activity`, `describe`, `help`;
+steps `--drag`, `--type`, `--context-click`; `tree --a11y`; `--json`.
+`Docs/STATUS.md` is generated from `Docs/status.json`
+(`polymer status --write`); agents report with `polymer log`. Guide for
+app agents: `Docs/AGENT_GUIDE.md`. Tool checks:
+`Sources/PolymerTools/ToolChecks.swift`. CRLF note: Swift treats "\r\n" as
+one Character, so split lines with `isNewline`, not `== "\n"`.
+
+**PolymerUI.** Menus, popovers, sheets and shortcuts (`ui.menus`); focus
+stays inside open panels.
+
+**PolymerDesign.** Tokens (`Theme`); components `PButton`, `PToggle`,
+`PSlider`, `PProgressBar`, `PSegmentedControl`, `PPicker`, `PListRow`,
+`PSectionHeader`, `PSidebarLayout`, `PToolbar`, `PTextField`, `PPanel`,
+tooltip, `PScrollBar`; commands (`CommandRegistry`); Customize. Catalogue:
+`Docs/COMPONENTS.md`; sample screen `components`; `design.*` checks.
+- Lesson: a visible stroked overlay takes clicks over its whole frame; use
+  `.border(...)` instead.
+- Known limits: tooltips appear instantly; no checkmark in pickers; the
+  automatic menu and the caret are not themed; `PScrollBar` is not wired to
+  `ScrollView`; no animations; commands stay registered after their view
+  disappears; `WindowHost` does not yet route unhandled keys to
+  `CommandRegistry`.
+- PolymerUI wish list: `PanelLook`/`TextInputLook` from the environment,
+  `.contentShape`, `.allowsHitTesting(false)`, scroll hooks, a
+  `keyboardShortcut(KeyboardShortcut)` overload, element names in
+  `elementTree`.
+
+**PolymerAudio.** WAV; FLAC (CRC and MD5 checked); our own MP3 Layer III
+decoder; ID3v1/v2 and Vorbis comments with pictures; Kaiser-windowed sinc
+resampler; `AudioEngine` (lock-free ring, gapless queue, volume, seek,
+clock, underrun count); `OfflineAudioOutput`; WASAPI output
+(`Sources/PolymerPlatformWindows/WASAPIOutput.swift`); 13 `audio.*` checks.
+- **Unverified:** WASAPI vtable indices and GUIDs were written from memory
+  and have never run on a device. MP3 Huffman tables (table 24 especially)
+  and the decoder are checked only against synthetic streams; real MP3
+  fixtures compared with ffmpeg are needed (`audio.fixtures` prints the
+  ffmpeg commands).
+- Not done: AAC/MP4, Layer I/II, free-format MP3, CoreAudio (Mac side),
+  exclusive mode, a 64-bit path (uses Float), streaming file reads.
+- To hook up: `Platform.install(audio: WASAPIOutputSystem())`,
+  `AudioEngine(format: output.format)`, `engine.start(on: output)`.
+  PolymerAudio is not yet in the `Polymer` umbrella target or PolymerTools.
+
+**Open, for the owner (design-visible).**
+- Context menu on press (macOS) or on release (Windows).
+- Menu corner at the exact click point, or rounded down to the pixel (now).
+- Placeholder look of menus, popovers and sheets.
+- Design tokens: accent #4F8CF0; greys #0E0E0E, #161616, #202020; square
+  corners; opaque panels, not glass; 1-point accent focus ring; controls 24,
+  rows 28, toolbar 40, sidebar 200 points.
+
+**Open, technical.**
+- Ctrl on Windows reaches `TextField` as `.command`, but `TextField`
+  expects `.control` for word movement and Ctrl-Y.
+- The cursor shape needs a `pointerStyle` API.
+- A menu over a focused field may leak typed characters to the field.
+- Menu key and Shift-F10 are not wired to context menus.
+- The element tree misparses a multi-line `Text` whose second line looks
+  like an element; fix by escaping newlines in `TextNode.detail`.
+
+**Next for i2s.** The Albums page on Polymer; playback end to end (hook up
+WASAPI, real MP3 fixtures); route `WindowHost` keys to `CommandRegistry`.
 
 ### Done
 
@@ -168,6 +298,24 @@ Current state of the work. Every session updates this before it ends.
     text and its rectangle, the editor's lines, wrapping, a disabled field,
     accessibility, partial frames equal whole draws);
     `out/checks/ui/text-input@2x.png` shows the look.
+  - Menus, popovers, sheets, shortcuts (Agent B, session 5;
+    `Presentation.swift`): a `Presentation` (menu, popover or sheet) holds
+    a `PanelNode` whose content is resolved with the presenting view's
+    context; `TreeState.presentations` is back to front. `ViewTree` places
+    them after layout (`placePresentations`: menu under its button,
+    submenu beside its parent, context menu at the click, popover under
+    its view or above, sheet centred, all clamped), draws them after the
+    root, hit-tests them first (`hitTest`; nothing behind a sheet), lists
+    them after the root in the element tree and the accessibility tree,
+    and searches them first for `click(text:)`. Popover and sheet follow
+    their binding; `dismiss` sets it false. `Menu` is a pass-through
+    `MenuNode` with a Button that opens it; inside a menu (`environment.menu`)
+    `Button` becomes an item (`MenuItemLabel` with its shortcut) whose action
+    closes the whole menu chain. Keys: focus chain first, then the front
+    presentation (`presentationKey`), then `.keyboardShortcut`
+    (`runShortcut`, scoped to the sheet), then Tab. Check: `ui.menus`. The
+    command system of DESIGN 7 (every element's right-click menu, menu bar)
+    builds on this with PolymerApp and PolymerDesign.
   - `LazyVStack` and `LazyHStack` (session 3): a `ForEach` inside builds,
     lays out and draws only the elements in view; see "How lazy stacks
     work" below.
@@ -215,6 +363,35 @@ Current state of the work. Every session updates this before it ends.
   `polymer render glass out.png --scale 2 --scroll 140`). They live in
   `PolymerChecks/UIChecks.swift`; a real screen registry comes with
   PolymerApp.
+
+### PolymerUI, session 5 (Agent B)
+
+Two agents worked at once in session 5: Agent A on rendering, the GPU and
+the platform layer, Agent B on PolymerUI (they coordinated through
+`out/coordination.md`, which is not committed). Agent B's commits, each
+signed, checked in debug and release: transitions, `.scaleEffect` and
+spring velocity; interactive glass; drag gestures, `Grid`,
+`GeometryReader`; the accessibility tree; `TextField` and `TextEditor`;
+menus, popovers, sheets and keyboard shortcuts. Details are in the
+sections below and in DIFFERENCES.
+
+**Uncommitted (2026-11-22):** GPG signing failed (no cached passphrase), so
+the menus work and everything after it (all of session 6) is uncommitted.
+Owner: run the PowerShell line under "State" to cache it, then commit.
+
+Menus, popovers, sheets and shortcuts (`Presentation.swift`,
+`PresentationChecks.swift`) pass `ui.menus` (50 checks, debug and release,
+2026-11-22). Decision: a context menu's corner goes on the pixel the click
+is in (rounded down at the display scale), not at a half point, so its
+1-point border stays crisp at 1x.
+
+Next for PolymerUI, in the order the rest depends on it (session 6 did the
+clipboard move, the window side and the `polymer` options; see above):
+- Move `TextEditing` to PolymerText.
+- Animated scroll positions (`ScrollViewReader`, `scrollTo` inside
+  `withAnimation`); scroll bars; a focus ring (design).
+- DESIGN 7: every element's right-click menu and Customize, on top of
+  `.contextMenu` and the menu panels, with PolymerDesign.
 
 ### How the view tree works (session 2)
 
@@ -764,11 +941,13 @@ side) to confirm the luminance rule between the two measured colours.
    Customize and for driving input), a focus ring, ~~animation~~ (frames,
    opacity, colours; session 4; transitions and spring velocity, session 5), ~~skipping bodies of unchanged `Equatable`
    views~~, ~~text cut to the height it is given~~ (both done, session 4).
-6. `PolymerDesign`: tokens, components, Customize and right-click menus.
+6. `PolymerDesign`: tokens, components, Customize and right-click menus
+   (first version, session 6; see "Session 6" for limits).
 7. `PolymerPlatform` window backends: Win32 window, input, DPI, refresh
    pacing, DWM glass. `ViewTree.onInvalidate` is where a window asks for
    a frame.
-8. The i2s Albums page on Polymer; then `PolymerAudio`.
+8. The i2s Albums page on Polymer; `PolymerAudio` (first version, session
+   6, unverified on a device).
 
 ## Windows side (where all sessions run)
 
@@ -787,7 +966,8 @@ side) to confirm the luminance rule between the two measured colours.
   `swift build -c release` then
   `.build/out/Products/Release-windows-x86_64/polymer.exe check`.
   The text check takes about 2 s in release; all checks take about 23 s
-  in debug. Both pass (36 checks) as of Windows session 4.
+  in debug. Both pass (70 checks, plus 6 tool checks) as of Windows
+  session 6.
 
 ## Mac side (for a later Mac session)
 
@@ -890,6 +1070,10 @@ side) to confirm the luminance rule between the two measured colours.
   want it), the selection as the text colour at 25% behind the text, the
   placeholder at 40%, no border or background. See
   `out/checks/ui/text-input@2x.png`.
+- Menus, popovers, sheets (Agent B, session 5): placeholder panels (white
+  0.11, a 1-point line at 14%, highlight at 12%, shortcuts as text like
+  "cmd+n", a "›" for submenus, no popover arrow, no dimming behind sheets).
+  Their look, and whether shortcuts show as symbols, wait for you.
 
 - `Divider` is 1 point thick and uses a separator colour of white at 14%
   opacity until PolymerDesign tokens exist. On 2x screens that is 2
