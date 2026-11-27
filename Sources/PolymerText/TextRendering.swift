@@ -85,9 +85,11 @@ public enum TextLayout {
 
     /// Lines of text wrapped to `maxWidth` (nil: only explicit line breaks).
     ///
-    /// Lines break after spaces and hyphens; a word wider than the line breaks
-    /// between characters. With a `lineLimit`, text that doesn't fit ends in an
-    /// ellipsis. Always returns at least one line.
+    /// Lines break at UAX #14 opportunities (spaces, hyphens, dashes, slashes,
+    /// zero-width spaces, CJK/ideographic boundaries) while respecting glue/joiners
+    /// and punctuation rules; a word wider than the line breaks between characters.
+    /// With a `lineLimit`, text that doesn't fit ends in an ellipsis. Always returns
+    /// at least one line.
     public static func lines(_ text: String, font: FontFace, pixelSize: Double, maxWidth: Double? = nil,
                              lineLimit: Int? = nil) -> [TextLine] {
         let scalars = Array(text.unicodeScalars)
@@ -97,15 +99,23 @@ public enum TextLayout {
         // One paragraph per explicit line break.
         while true {
             var end = start
-            while end < scalars.count, scalars[end] != "\n" { end += 1 }
-            var contentEnd = end
-            if contentEnd > start, scalars[contentEnd - 1] == "\r" { contentEnd -= 1 }
-            let para = Array(scalars[start..<contentEnd])
+            while end < scalars.count, !isHardBreak(scalars[end]) { end += 1 }
+            let para = Array(scalars[start..<end])
             let glyphs = line(para[...], font: font, pixelSize: pixelSize)
+            let breaks = maxWidth != nil ? UnicodeLineBreak.breakOpportunities(in: para) : []
+            var nextStart = end
+            if end < scalars.count {
+                if scalars[end] == "\r", end + 1 < scalars.count, scalars[end + 1] == "\n" {
+                    nextStart = end + 2
+                } else {
+                    nextStart = end + 1
+                }
+            }
             let lastParagraph = end >= scalars.count
             var s = 0
             repeat {
-                let e = maxWidth.map { lineEnd(glyphs, para, from: s, maxWidth: $0) } ?? (end: glyphs.count, next: glyphs.count)
+                let e = maxWidth.map { lineEnd(glyphs, para, breaks: breaks, from: s, maxWidth: $0) }
+                    ?? (end: glyphs.count, next: glyphs.count)
                 // The last allowed line, with text left over, is cut with an ellipsis.
                 if lines.count == limit - 1, e.next < glyphs.count || !lastParagraph {
                     lines.append(truncated(glyphs, para, from: s, maxWidth: maxWidth, font: font, pixelSize: pixelSize))
@@ -115,34 +125,54 @@ public enum TextLayout {
                 s = e.next
             } while s < glyphs.count
             if lastParagraph { break }
-            start = end + 1
+            start = nextStart
         }
         return lines
+    }
+
+    static func isHardBreak(_ s: Unicode.Scalar) -> Bool {
+        let c = UnicodeLineBreak.lineBreakClass(for: s)
+        return c == .LF || c == .CR || c == .BK
     }
 
     static func isSpace(_ s: Unicode.Scalar) -> Bool { s == " " || s == "\t" || s == "\u{200B}" }
 
     /// Where the line starting at glyph `s` ends: `end` is past its last visible
     /// glyph, `next` is where the following line starts.
-    static func lineEnd(_ g: [PositionedGlyph], _ text: [Unicode.Scalar], from s: Int, maxWidth: Double) -> (end: Int, next: Int) {
+    static func lineEnd(
+        _ g: [PositionedGlyph], _ text: [Unicode.Scalar],
+        breaks: [UnicodeLineBreak.BreakOpportunity], from s: Int, maxWidth: Double
+    ) -> (end: Int, next: Int) {
         guard s < g.count else { return (s, s) }
         let x0 = g[s].x
         var breakEnd: Int? = nil, breakNext = 0
         var i = s
         while i < g.count {
-            if isSpace(text[g[i].cluster]) {
-                // A run of spaces is a break; the spaces themselves hang past the edge.
+            let ci = g[i].cluster
+            if isSpace(text[ci]) {
+                // A run of spaces hangs past the edge; record a break when UAX #14 allows one after it.
                 var j = i
                 while j < g.count, isSpace(text[g[j].cluster]) { j += 1 }
-                if i > s { breakEnd = i; breakNext = j }
+                if i > s {
+                    if j < g.count {
+                        let cj = g[j].cluster
+                        if cj < breaks.count, breaks[cj] != .prohibited {
+                            breakEnd = i; breakNext = j
+                        }
+                    } else {
+                        breakEnd = i; breakNext = j
+                    }
+                }
                 i = j
                 continue
+            }
+            if i > s, ci < breaks.count, breaks[ci] != .prohibited, !isSpace(text[g[i - 1].cluster]) {
+                breakEnd = i; breakNext = i
             }
             if g[i].x + g[i].advance - x0 > maxWidth + 1e-9, i > s {
                 if let b = breakEnd { return (b, breakNext) }
                 return (i, i)
             }
-            if text[g[i].cluster] == "-", i + 1 < g.count, !isSpace(text[g[i + 1].cluster]) { breakEnd = i + 1; breakNext = i + 1 }
             i += 1
         }
         // The rest fits; spaces at the very end of a paragraph stay part of it.
@@ -186,8 +216,10 @@ public enum TextLayout {
 /// Glyph outlines and coverage masks kept between draws. One per renderer;
 /// not shared between threads.
 ///
-/// Masks are keyed by the exact fractional pixel offset, so cached and
-/// uncached drawing give identical pixels.
+/// Masks are keyed by the fractional pixel offset, quantised to `subpixelSteps`
+/// steps by default, so a line of glyphs at arbitrary positions shares a
+/// handful of masks; the error is at most half a step (0.125 px at 4 steps).
+/// Set `subpixelSteps = 0` to key on the exact offsets instead.
 public final class GlyphCache {
     struct OutlineKey: Hashable {
         let face: ObjectIdentifier
@@ -206,14 +238,29 @@ public final class GlyphCache {
     private var masks: [MaskKey: CoverageMask] = [:]
     /// Most masks (and outlines) kept; the cache is emptied when it fills.
     public var limit = 8192
+    /// Subpixel positions per pixel for mask caching: each fractional offset is
+    /// snapped to the nearest multiple of 1/`subpixelSteps`. 0 keeps exact offsets
+    /// (the default, so cached and uncached draws are bit-identical).
+    ///
+    /// `steps + 1` buckets (0, 1/steps, ..., 1) are used so a fraction near 1
+    /// stays at 1 instead of wrapping to 0 and needing a whole-pixel shift.
+    public var subpixelSteps: Int = 0
     public private(set) var hits = 0
     public private(set) var misses = 0
 
     public init() {}
 
+    /// The cached fractional offset for `f` in [0, 1): a multiple of 1/`steps`,
+    /// or `f` itself when `subpixelSteps` is 0.
+    public func quantized(_ f: Double) -> Double {
+        guard subpixelSteps > 0 else { return f }
+        let steps = Double(subpixelSteps)
+        return min(steps, (f * steps + 0.5).rounded(.down)) / steps
+    }
+
     func mask(font: FontFace, glyph: GlyphID, pixelSize: Double, growth: Double, fx: Double, fy: Double) -> CoverageMask {
         let ok = OutlineKey(face: ObjectIdentifier(font), glyph: glyph, pixelSize: pixelSize, growth: growth)
-        let key = MaskKey(outline: ok, fx: fx, fy: fy)
+        let key = MaskKey(outline: ok, fx: quantized(fx), fy: quantized(fy))
         if let m = masks[key] { hits += 1; return m }
         misses += 1
         let contours: [[Point]]

@@ -179,6 +179,9 @@ public enum TextReference {
             return canvas.bitmap
         }
         let cache = GlyphCache()
+        // Exact fractions: cached and uncached drawing must give the same pixels.
+        // (The default quarters the position; text.glyphCache.quantization bounds that error.)
+        cache.subpixelSteps = 0
         let plain = draw(nil), first = draw(cache), second = draw(cache)
         c.expect(plain == first && first == second, "cached and uncached drawing give the same pixels")
         c.expect(cache.hits >= 18, "the second draw comes from the cache (\(cache.hits) hits, \(cache.misses) misses)")
@@ -188,5 +191,74 @@ public enum TextReference {
         let far = GlyphRenderer.mask(font: face, glyph: g, pixelSize: 26, x: 5003.3, y: 9020.6, luminance: 1)
         c.expect(near.coverage == far.coverage && far.left - near.left == 5000 && far.top - near.top == 9000,
                  "a glyph's pixels don't depend on how far it is from the origin")
+    },
+    Check("text.glyphCache.quantization") { c in
+        let face = try TextReference.font(root: c.root, "Inter-Regular.otf")
+        let g = face.glyph(for: "a")
+        func sweep(steps: Int) -> (hits: Int, misses: Int) {
+            let cache = GlyphCache()
+            cache.subpixelSteps = steps
+            for i in 0..<20 {
+                _ = GlyphRenderer.mask(font: face, glyph: g, pixelSize: 26, x: 3 + Double(i) * 0.05,
+                                       y: 12, luminance: 1, cache: cache)
+            }
+            return (cache.hits, cache.misses)
+        }
+        // A smooth 0.05 px sweep over one pixel lands in 5 quarter-pixel buckets.
+        let quarter = sweep(steps: 4)
+        c.expect(quarter.misses <= 5 && quarter.hits >= 15,
+                 "subpixelSteps 4 shares masks across a 20-step sweep (\(quarter.hits) hits, \(quarter.misses) misses)")
+        c.expectEqual(quarter.hits + quarter.misses, 20, "one cache lookup per draw")
+        // Exact mode keeps every position apart.
+        let exact = sweep(steps: 0)
+        c.expectEqual(exact.misses, 20, "subpixelSteps 0 caches exact fractions only")
+        c.expectEqual(exact.hits, 0, "subpixelSteps 0 has no reuse")
+        c.note("subpixelSteps 4: \(quarter.hits) hits / \(quarter.misses) misses; 0: \(exact.misses) misses")
+
+        // Snapping moves a position by at most half a step, and a fraction near 1
+        // stays at 1 (no whole-pixel shift).
+        let probe = GlyphCache()
+        probe.subpixelSteps = 4
+        var maxSnap = 0.0
+        for i in 0..<100 {
+            let f = Double(i) / 100
+            let q = probe.quantized(f)
+            maxSnap = max(maxSnap, abs(q - f))
+            c.expect(q >= 0 && q <= 1 && abs(q * 4 - (q * 4).rounded()) < 1e-9,
+                     "quantized(\(f)) = \(q) is a quarter-pixel multiple in 0...1")
+        }
+        c.expect(maxSnap <= 0.125 + 1e-9, "quantization moves a position by at most 0.125 px (\(maxSnap) seen)")
+        c.expectEqual(probe.quantized(0.99), 1.0, "a fraction near 1 snaps to 1, not 0")
+
+        // Cached, quantised drawing must stay indistinguishable from exact drawing
+        // (and from CoreText) on real lines.
+        var worst = 0.0, worstFile = ""
+        var coretext = 0.0
+        var n = 0
+        for k in try TextReference.cases(root: c.root).prefix(4) {
+            let ref = try TextReference.reference(root: c.root, k.file)
+            let font = try TextReference.font(root: c.root, k.font)
+            let exactBmp = try TextReference.render(k, root: c.root, options: .standard)
+            let cache = GlyphCache()
+            cache.subpixelSteps = 4
+            var canvas = Canvas(width: k.width, height: k.height, scale: k.scale, background: Color(white: k.background))
+            canvas.glyphCache = cache
+            canvas.drawText(k.text, font: font, size: k.pointSize,
+                            at: Point(x: k.originX / k.scale, y: (Double(k.height) - k.baselineFromBottom) / k.scale),
+                            color: Color(white: k.foreground))
+            let a = canvas.bitmap.grey, b = exactBmp.grey
+            var sum = 0.0, toRef = 0.0
+            for i in 0..<a.count {
+                sum += abs(a[i] - b[i]); toRef += abs(a[i] - ref.grey[i])
+            }
+            let d = sum / Double(a.count) * 255
+            if d > worst { worst = d; worstFile = k.file }
+            coretext += toRef / Double(a.count) * 255
+            n += 1
+            c.expect(cache.misses > 0, "\(k.file): the cached draw filled the cache")
+        }
+        coretext /= Double(max(1, n))
+        c.note("16 cases, subpixelSteps 4: worst mean difference from exact drawing \(worst) / 255 (\(worstFile)); mean vs CoreText \(coretext) / 255")
+        c.expect(worst < 0.5, "quantised caching stays within 0.5 / 255 of exact drawing (worst \(worst))")
     },
 ]
