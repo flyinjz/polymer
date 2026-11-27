@@ -8,18 +8,8 @@
 import PolymerBase
 import PolymerText
 import PolymerRender
-
-/// Where cut, copied and pasted text goes. A window installs the system's;
-/// headless trees use a `MemoryClipboard`, so checks never touch the real one.
-public protocol Clipboard: AnyObject {
-    var string: String? { get set }
-}
-
-/// A clipboard that lives in memory.
-public final class MemoryClipboard: Clipboard {
-    public var string: String?
-    public init(_ string: String? = nil) { self.string = string }
-}
+// Only the clipboard: PolymerPlatform's other names (its `Path`) would shadow PolymerBase's.
+import protocol PolymerPlatform.Clipboard
 
 /// One line of editable text: edits a `String` binding. `title` is shown,
 /// dimmed, while it is empty. Return runs the `.onSubmit` action.
@@ -67,13 +57,29 @@ extension EnvironmentValues {
 }
 
 /// How the views a text field draws look (placeholders for design tokens).
-enum TextInputLook {
+/// PolymerDesign themes it with `.environment(\.textInputLook, ...)`.
+public struct TextInputLook: Equatable, Sendable {
     /// The placeholder: the text colour at this opacity.
-    static let placeholderOpacity = 0.4
+    public var placeholderOpacity: Double
     /// The selection: the text colour at this opacity, behind the text.
-    static let selectionOpacity = 0.25
+    public var selectionOpacity: Double
     /// The caret's width in points.
-    static let caretWidth = 1.0
+    public var caretWidth: Double
+
+    public init(placeholderOpacity: Double = 0.4, selectionOpacity: Double = 0.25, caretWidth: Double = 1) {
+        self.placeholderOpacity = placeholderOpacity
+        self.selectionOpacity = selectionOpacity
+        self.caretWidth = caretWidth
+    }
+}
+
+struct TextInputLookKey: EnvironmentKey { static var defaultValue: TextInputLook { TextInputLook() } }
+extension EnvironmentValues {
+    /// The look of text fields and editors; set with `.environment(\.textInputLook, ...)`.
+    public var textInputLook: TextInputLook {
+        get { self[TextInputLookKey.self] }
+        set { self[TextInputLookKey.self] = newValue }
+    }
 }
 
 /// A line of laid-out editable text: the characters it shows and where the caret can go.
@@ -96,6 +102,8 @@ final class TextInputNode: Node {
     var options: TextRenderingOptions = .standard
     var isEnabled = true
     var submit: SubmitAction?
+    /// The look, from the environment where the field was resolved.
+    var look = TextInputLook()
     private(set) var editing = TextEditing()
     /// How far the content is scrolled (x for a field, y for an editor), in points.
     private(set) var scrollOffset = 0.0
@@ -113,6 +121,7 @@ final class TextInputNode: Node {
         options = e.textRendering
         isEnabled = e.isEnabled
         submit = e.submitAction
+        look = e.textInputLook
         // Read now, while resolving, not in the body: reported to the enclosing view so a change to it updates the field.
         let value = c.host?.track { text.wrappedValue } ?? text.wrappedValue
         if value != editing.text { editing.setText(multiline ? value : value.replacingNewlines); linesWidth = -1 }
@@ -121,7 +130,7 @@ final class TextInputNode: Node {
 
     override var role: String { multiline ? "TextEditor" : "TextField" }
     override var detail: String {
-        var d = editing.count == 0 && !title.isEmpty ? "placeholder \"\(title)\"" : "\"\(editing.text.escapedNewlines)\""
+        var d = editing.count == 0 && !title.isEmpty ? "placeholder \"\(title.escapedForElementTree)\"" : "\"\(editing.text.escapedForElementTree)\""
         let s = editing.selection
         if tree?.focused === self { d += s.isEmpty ? " caret \(editing.head)" : " selection \(s.lowerBound)..\(s.upperBound)" }
         if let m = editing.marked { d += " marked \(m.lowerBound)..\(m.upperBound)" }
@@ -146,7 +155,7 @@ final class TextInputNode: Node {
         // A field takes the width offered; offered none, its text's (or its placeholder's).
         let shown = editing.count == 0 ? title : editing.text
         let w = TextLayout.line(shown, font: font.face, pixelSize: font.size).reduce(0) { max($0, $1.x + $1.advance) }
-        return Size(width: p.width ?? (w * scale).rounded(.up) / scale + TextInputLook.caretWidth, height: lineHeight)
+        return Size(width: p.width ?? (w * scale).rounded(.up) / scale + look.caretWidth, height: lineHeight)
     }
 
     override func placeChildren(in r: Rect) {
@@ -270,7 +279,7 @@ final class TextInputNode: Node {
             let content = Double(laidOut().count) * lh
             scrollOffset = max(0, min(scrollOffset, max(0, content - f.height)))
         } else {
-            let room = max(0, f.width - TextInputLook.caretWidth)
+            let room = max(0, f.width - look.caretWidth)
             if c.x < scrollOffset { scrollOffset = c.x }
             if c.x > scrollOffset + room { scrollOffset = c.x - room }
             let w = laidOut().first?.carets.last ?? 0
@@ -293,7 +302,7 @@ final class TextInputNode: Node {
                     let glyphs = TextLayout.line(title, font: font.face, pixelSize: font.size)
                     let baseline = baselineY(row: 0, top: shift.y, font: font)
                     list.drawGlyphs(glyphs, font: font.face, size: font.size, at: Point(x: snap(shift.x), y: baseline),
-                                    color: color.opacity(TextInputLook.placeholderOpacity), options: options)
+                                    color: color.opacity(look.placeholderOpacity), options: options)
                 }
             } else {
                 let ls = laidOut()
@@ -311,7 +320,7 @@ final class TextInputNode: Node {
                             let x0 = l.carets[a - l.range.lowerBound]
                             let x1 = l.carets[b - l.range.lowerBound] + (breakSelected ? font.size * 0.3 : 0)
                             list.fill(Rect(x: shift.x + x0, y: top, width: max(0, x1 - x0), height: lh),
-                                      color.opacity(TextInputLook.selectionOpacity))
+                                      color.opacity(look.selectionOpacity))
                         }
                     }
                     let baseline = baselineY(row: i, top: shift.y, font: font)
@@ -327,7 +336,7 @@ final class TextInputNode: Node {
             }
             if focused, editing.selection.isEmpty {
                 let c = caretPoint(editing.head)
-                list.fill(Rect(x: snap(shift.x + c.x), y: shift.y + c.y, width: TextInputLook.caretWidth, height: lh), color)
+                list.fill(Rect(x: snap(shift.x + c.x), y: shift.y + c.y, width: look.caretWidth, height: lh), color)
             }
         }
     }
@@ -400,7 +409,7 @@ final class TextInputNode: Node {
                 case "x": if copy() { edit { $0.delete(to: $0.head) } }
                 case "v": if let s = tree?.clipboard?.string { insert(s) }
                 case "z": edit { if shift { $0.redo() } else { $0.undo() } }
-                case "y" where m.contains(.control): edit { $0.redo() }
+                case "y": edit { $0.redo() }   // Ctrl+Y on Windows arrives as `.command`
                 default: return .ignored
                 }
                 return .handled
@@ -488,11 +497,6 @@ final class TextInputNode: Node {
 
 extension String {
     var replacingNewlines: String { String(map { $0 == "\n" || $0 == "\r\n" ? " " : $0 }) }
-    var escapedNewlines: String {
-        var s = ""
-        for c in self { if c == "\n" { s += "\\n" } else { s.append(c) } }
-        return s
-    }
     /// True when typing these characters should insert them (not a control key or a function key).
     var isPrintable: Bool {
         guard !isEmpty else { return false }

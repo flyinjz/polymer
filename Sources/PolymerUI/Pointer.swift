@@ -3,6 +3,36 @@
 // pointer through `ViewTree.pointerMoved/Down/Up`.
 import PolymerBase
 
+// MARK: Pointer states
+
+/// The shape of the mouse pointer over a view (`ViewTree.pointerStyle(at:)`).
+/// Windows and Mac backends map it to their cursor; headless trees report it.
+public enum PointerStyle: Equatable, Sendable {
+    case arrow, iBeam, pointingHand, resizeLeftRight, resizeUpDown
+}
+
+extension View {
+    /// The pointer shape over this view and everything inside it (the nearest one wins).
+    public func pointerStyle(_ style: PointerStyle) -> some View {
+        PointerStyleView(content: self, style: style)
+    }
+}
+
+struct PointerStyleView<Content: View>: View, PrimitiveView {
+    let content: Content, style: PointerStyle
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? PointerStyleNode) ?? PointerStyleNode()
+        n.style = style
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class PointerStyleNode: PassthroughNode {
+    var style: PointerStyle = .arrow
+    override var isElement: Bool { false }
+}
+
 /// How a button looks, given its label and whether it is held down (SwiftUI's `ButtonStyle`).
 public protocol ButtonStyle {
     associatedtype Body: View

@@ -18,6 +18,20 @@ public struct Button<Label: View>: View, PrimitiveView {
         let n = reuse ?? TapNode(isButton: true)
         n.action = action
         n.isEnabled = c.environment.isEnabled
+        if let menu = c.environment.menu {
+            // In a menu the button is a menu item: it runs, then the whole menu closes.
+            let action = action
+            n.action = { [weak presentation = menu.presentation] in
+                var top = presentation
+                while let p = top?.parent { top = p }
+                action()
+                top?.close()
+            }
+            var ic = c
+            ic.environment.menu = nil
+            n.setChild(0, MenuItemLabel(label: label, trailing: c.environment.keyboardShortcut?.description, enabled: n.isEnabled), ic)
+            return n
+        }
         let style = c.environment.buttonStyle
         if style is PlainButtonStyle {
             n.setChild(0, label, c)

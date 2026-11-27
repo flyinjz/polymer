@@ -219,3 +219,58 @@ final class OffsetNode: Node {
     override func sizeThatFits(_ p: ProposedViewSize) -> Size { children[0].measure(p) }
     override func placeChildren(in r: Rect) { children[0].place(r.offsetBy(dx: dx, dy: dy)) }
 }
+
+extension View {
+    /// When false, clicks, drags and hovers pass through the view and
+    /// everything inside it, which still draw and keep their state.
+    public func allowsHitTesting(_ enabled: Bool) -> some View {
+        HitTestingView(content: self, allows: enabled)
+    }
+}
+
+struct HitTestingView<Content: View>: View, PrimitiveView {
+    let content: Content, allows: Bool
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? HitTestingNode) ?? HitTestingNode()
+        n.allowsHitTesting = allows
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class HitTestingNode: PassthroughNode {
+    var allowsHitTesting = true
+    override var isElement: Bool { false }
+    override func hitTest(_ p: Point) -> Node? {
+        allowsHitTesting ? super.hitTest(p) : nil
+    }
+}
+
+extension View {
+    /// Runs `action` when this view leaves the tree.
+    public func onDisappear(perform action: @escaping @MainActor () -> Void) -> some View {
+        OnDisappearView(content: self, action: action)
+    }
+}
+
+struct OnDisappearView<Content: View>: View, PrimitiveView {
+    let content: Content
+    let action: @MainActor () -> Void
+    func resolve(_ existing: Node?, _ c: ResolveContext) -> Node {
+        let n = (existing as? OnDisappearNode) ?? OnDisappearNode()
+        n.action = action
+        n.setChild(0, content, c)
+        return n
+    }
+}
+
+final class OnDisappearNode: PassthroughNode {
+    var action: (@MainActor () -> Void)?
+    override var isElement: Bool { false }
+    override func unmount() {
+        let fn = action
+        action = nil
+        super.unmount()
+        fn?()
+    }
+}

@@ -49,7 +49,8 @@ final class TextNode: Node {
     }
 
     override var role: String { "Text" }
-    override var detail: String { "\"\(string)\"" }
+    // Escaped, so one element is always one line of the element tree.
+    override var detail: String { "\"\(string.escapedForElementTree)\"" }
     override var isHitTarget: Bool { true }
 
     /// Lines wrapped to `width` points (nil: only explicit line breaks). Offered
@@ -178,4 +179,23 @@ final class DividerNode: Node {
         vertical ? Size(width: 1, height: p.height ?? 0) : Size(width: p.width ?? 0, height: 1)
     }
     override func drawContent(_ list: inout DisplayList) { if list.isVisible(frame) { list.fill(frame, color) } }
+}
+
+extension String {
+    /// The text as it sits inside the element tree's quotes: line breaks and
+    /// quotes are escaped, so a multi-line `Text` stays one line and nothing
+    /// in it can be read as another element.
+    var escapedForElementTree: String {
+        var out = ""
+        out.reserveCapacity(count)
+        for c in self {
+            switch c {
+            case "\r\n", "\n", "\r": out += "\\n"
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            default: out.append(c)
+            }
+        }
+        return out
+    }
 }

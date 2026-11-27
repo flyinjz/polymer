@@ -262,8 +262,10 @@ extension TreeState {
     /// them, and drops focus from a view that left the tree. Returns true
     /// when focus moved or a binding was written (views need evaluating).
     func syncFocus(root: Node?) -> Bool {
-        // Gone from the tree, or no longer focusable (disabled).
-        if let f = focused, !f.isMounted || !f.acceptsFocus || !isInside(f, root) { setFocus(nil); return true }
+        // Gone from the tree (the root view or an open menu, popover or sheet), or no longer focusable (disabled).
+        if let f = focused, !f.isMounted || !f.acceptsFocus || !(isInside(f, root) || presentations.contains { f.isInside($0.panel) }) {
+            setFocus(nil); return true
+        }
         var wrote = pruneBindings()
         let all = focusBindings.compactMap(\.node)
         // A binding set to its view: focus the first focusable view there.

@@ -5,6 +5,8 @@
 // evaluated again.
 import PolymerBase
 import Synchronization
+import protocol PolymerPlatform.Clipboard
+import class PolymerPlatform.MemoryClipboard
 
 // MARK: Property wrappers
 
@@ -242,6 +244,8 @@ final class TreeState {
     /// Nodes drawing removed children that are still leaving (`Node.ghosts`).
     /// Where text fields cut, copy and paste (`ViewTree.clipboard`).
     var clipboard: (any Clipboard)? = MemoryClipboard()
+    /// Menus, popovers and sheets shown above the root, back to front.
+    var presentations: [Presentation] = []
     var ghostOwners: [WeakNode] = []
     func addGhostOwner(_ n: Node) {
         if !ghostOwners.contains(where: { $0.node === n }) { ghostOwners.append(WeakNode(node: n)) }

@@ -17,6 +17,9 @@ public enum AccessibilityRole: String, Sendable {
     case scrollArea = "scroll area"
     case group
     case focusable = "focusable"
+    case menu
+    case popover
+    case dialog = "sheet"
 }
 
 /// Extra facts about an element, as in SwiftUI.
@@ -192,6 +195,7 @@ extension Node {
         case is ScrollNode: return (.scrollArea, "", nil, [], .contain, true)
         case let t as TextInputNode: return (.textField, t.title, t.editing.text, [], .ignore, t.isEnabled)
         case is FocusableNode: return (.focusable, "", nil, [], .combine, true)
+        case let p as PanelNode: return (p.kind == .menu ? .menu : p.kind == .popover ? .popover : .dialog, "", nil, [], .contain, true)
         default: return nil
         }
     }

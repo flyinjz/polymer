@@ -24,11 +24,14 @@ public final class WindowHost: WindowDelegate {
     private let log = Logger("window")
 
     /// `offscreen` presents into images instead of the window (for checks).
+    /// `clipboard` is the system's (`Platform.clipboard`, from the entry point);
+    /// without one the tree keeps its own in memory.
     public init(tree: ViewTree, window: any PlatformWindow, backend: any GPUBackend, background: Color,
-                offscreen: Bool = false) throws(GPUError) {
+                offscreen: Bool = false, clipboard: (any Clipboard)? = nil) throws(GPUError) {
         self.tree = tree
         self.window = window
         self.background = background
+        if let clipboard { tree.clipboard = clipboard }
         renderer = try GPURenderer(backend: backend)
         presenter = try backend.makePresenter(windowHandle: offscreen ? 0 : window.nativeHandle,
                                               width: window.pixelWidth, height: window.pixelHeight)
@@ -44,14 +47,29 @@ public final class WindowHost: WindowDelegate {
     public func handle(_ event: WindowEvent) {
         switch event {
         case .pointerMoved(let p): tree.pointerMoved(to: p)
-        case .pointerDown(let p, .primary): _ = tree.pointerDown(at: p)
+        case .pointerDown(let p, .primary, let clicks):
+            _ = tree.pointerDown(at: p, clickCount: clicks)
+            syncTextInput()
         case .pointerUp(let p, .primary): _ = tree.pointerUp(at: p)
-        case .pointerDown, .pointerUp: break   // other buttons: right-click menus come with commands (PolymerApp)
+        // Right-click opens the context menu on the press, as on macOS (the same on every OS).
+        case .pointerDown(let p, .secondary, _): _ = tree.contextClick(at: p)
+        case .pointerDown, .pointerUp: break
         case .pointerExited: tree.pointerExited()
         case .scroll(let p, let dx, let dy): _ = tree.scroll(at: p, dx: dx, dy: dy)
         case .keyDown(let key, let characters, let modifiers, let isRepeat):
-            _ = tree.key(Self.keyPress(key, characters: characters, modifiers: modifiers, isRepeat: isRepeat))
+            // A key that types text into a text field arrives again as `.text`: only that one inserts.
+            if !(Self.typesText(characters, modifiers: modifiers) && tree.acceptsTextInput) {
+                _ = tree.key(Self.keyPress(key, characters: characters, modifiers: modifiers, isRepeat: isRepeat))
+            }
+            syncTextInput()
         case .keyUp: break
+        case .text(let s):
+            _ = tree.insertText(s)
+            syncTextInput()
+        case .markedText(let s, let selected):
+            // Ending with nothing marked changes nothing (no undo step, the selection stays).
+            if !s.isEmpty || tree.markedTextRange != nil { _ = tree.setMarkedText(s, selectedRange: selected) }
+            syncTextInput()
         case .resized(let w, let h, let s): resize(width: w, height: h, scale: s)
         case .closeRequested: window.close()
         }
@@ -88,14 +106,38 @@ public final class WindowHost: WindowDelegate {
         } catch {
             log.error("drawing a frame: \(error)")
         }
+        // Focus or layout may have moved the caret (or a view took focus by itself).
+        syncTextInput()
         return tree.isAnimating || tree.needsUpdate
+    }
+
+    /// Tells the window whether the focused view takes text, and where its
+    /// caret or marked text is (for the input method's candidates).
+    private func syncTextInput() {
+        var caret: Rect?
+        if tree.acceptsTextInput, let selected = tree.selectedTextRange {
+            let range = tree.markedTextRange.map { selected.isEmpty ? $0 : selected } ?? (selected.lowerBound..<selected.lowerBound)
+            caret = tree.firstRect(forCharacterRange: range)
+        }
+        window.setTextInput(caret)
+    }
+
+    /// True when a key down with these characters types them (the window
+    /// sends them again as `.text`): printable, and not a shortcut. Ctrl with
+    /// Alt is AltGr on Windows, which types.
+    public static func typesText(_ characters: String, modifiers: KeyModifiers) -> Bool {
+        guard !characters.isEmpty, !modifiers.contains(.control) else { return false }
+        if modifiers.contains(.command), !modifiers.contains(.option) { return false }
+        for s in characters.unicodeScalars {
+            if s.value < 0x20 || s.value == 0x7F || (0xF700...0xF8FF).contains(s.value) { return false }
+        }
+        return true
     }
 
     /// This frame's display list and what changed since the last one.
     private func record() -> (DisplayList, [PixelRect]) {
-        // Draws on the CPU too until ViewTree can record without drawing (asked of PolymerUI).
-        _ = tree.render(background: background)
-        return (tree.displayList!, tree.damage)
+        // The GPU draws it: no CPU rasterisation, only recording and damage.
+        tree.record(background: background)
     }
 
     /// A platform key as SwiftUI's `KeyPress`.

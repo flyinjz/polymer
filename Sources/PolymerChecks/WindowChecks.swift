@@ -20,11 +20,37 @@ final class TestWindow: PlatformWindow {
     weak var delegate: WindowDelegate?
     var closed = false
     nonisolated let frameRequests = Atomic<Int>(0)
+    /// The last `setTextInput`, and how many there were.
+    var textInput: Rect?
+    var textInputCalls = 0
     init(width: Int, height: Int, scale: Double) { pixelWidth = width; pixelHeight = height; self.scale = scale }
     var nativeHandle: UInt { 0 }
     func show() {}
     func close() { closed = true }
+    func setTextInput(_ caret: Rect?) { textInput = caret; textInputCalls += 1 }
     nonisolated func setNeedsFrame() { frameRequests.add(1, ordering: .relaxed) }
+}
+
+@Observable
+final class HostInputModel {
+    var name = ""
+    var wide = false
+    var log: [String] = []
+}
+
+/// A text field, a context menu and something to animate, driven through window events.
+struct HostInputScreen: View {
+    let model: HostInputModel
+    let font: Font
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Name", text: Binding(get: { model.name }, set: { model.name = $0 })).frame(width: 160)
+            Text("Row").contextMenu { Button("Delete") { model.log.append("delete") } }
+            Color.white.frame(width: model.wide ? 60 : 30, height: 10)
+        }
+        .font(font)
+        .frame(width: 300, height: 150, alignment: .topLeading)
+    }
 }
 
 /// The top-left `width` x `height` of an RGBA image `stride` pixels wide.
@@ -43,6 +69,15 @@ func crop(_ rgba: [UInt8], stride: Int, width: Int, height: Int) -> Bitmap {
         } else {
             c.note("no window backend for this OS yet")
         }
+        // Which key downs the host leaves to `.text` while a field has focus.
+        c.expect(WindowHost.typesText("a", modifiers: []) && WindowHost.typesText("A", modifiers: [.shift]), "letters type")
+        c.expect(WindowHost.typesText("@", modifiers: [.command, .option]), "AltGr (Ctrl and Alt on Windows) types")
+        c.expect(WindowHost.typesText("å", modifiers: [.option]), "Option types")
+        c.expect(!WindowHost.typesText("a", modifiers: [.command]) && !WindowHost.typesText("\u{1}", modifiers: [.command])
+                 && !WindowHost.typesText("a", modifiers: [.control]), "shortcuts do not")
+        c.expect(!WindowHost.typesText("\r", modifiers: []) && !WindowHost.typesText("\u{8}", modifiers: [])
+                 && !WindowHost.typesText("", modifiers: []) && !WindowHost.typesText("\u{F700}", modifiers: []),
+                 "control characters, nothing and function keys do not")
         guard GPU.isAvailable else { c.note("no GPU backend: the host is not checked"); return }
 
         let background = Color(white: 0.063)
@@ -101,5 +136,72 @@ func crop(_ rgba: [UInt8], stride: Int, width: Int, height: Int) -> Bitmap {
         c.expect(window.closed, "asking to close closes")
         c.expectEqual(WindowHost.keyPress(.character("a"), characters: "A", modifiers: [.shift, .command], isRepeat: true).modifiers,
                       [.shift, .command], "modifiers carry over")
+
+        // Text, clicks, context menus and animation through window events.
+        let font = Font(try TextReference.font(root: c.root, "Geist-Regular.otf"), size: 13)
+        let im = HostInputModel()
+        let iw = TestWindow(width: 300, height: 150, scale: 1)   // the screen's size: nothing centres it
+        let cb = MemoryClipboard("pasted")
+        let ih = try WindowHost(tree: ViewTree(HostInputScreen(model: im, font: font)), window: iw, backend: try GPU.makeBackend(),
+                                background: background, offscreen: true, clipboard: cb)
+        var it = 0.0
+        ih.clock = { it }
+        @MainActor func step() -> Bool { it += 1 / 60; return ih.frame(time: it) }
+        _ = step()
+        c.expect(iw.textInputCalls > 0 && iw.textInput == nil, "no text input while no field has focus")
+        c.expect(ih.tree.clipboard === cb, "the host gives the tree its clipboard")
+
+        // Frames keep coming while something animates, and stop after.
+        withAnimation(.linear(duration: 1)) { im.wide = true }
+        c.expect(step(), "an animation asks for the next frame")
+        it += 2
+        _ = step()
+        c.expect(!step(), "and stops asking once it ends")
+
+        // A click focuses the field: text input goes on, at its caret.
+        let inField = Point(x: 80, y: 8)
+        for e: WindowEvent in [.pointerDown(inField, .primary), .pointerUp(inField, .primary)] { ih.handle(e) }
+        c.expect(ih.tree.acceptsTextInput && iw.textInput != nil, "a click on a field turns text input on: \(String(describing: iw.textInput))")
+
+        // A key that types comes again as text: inserted once, as the text says (dead keys, AltGr).
+        ih.handle(.keyDown(.character("h"), characters: "h", modifiers: [], isRepeat: false))
+        ih.handle(.text("h"))
+        c.expectEqual(im.name, "h", "a typed key inserts once")
+        ih.handle(.keyDown(.character("e"), characters: "e", modifiers: [], isRepeat: false))
+        ih.handle(.text("é"))
+        c.expectEqual(im.name, "hé", "the composed character, not the key's")
+        ih.handle(.keyDown(.backspace, characters: "\u{8}", modifiers: [], isRepeat: false))
+        c.expectEqual(im.name, "h", "keys that type nothing still edit")
+
+        // Input method compositions.
+        ih.handle(.markedText("ni", selectedRange: 2..<2))
+        c.expect(im.name == "hni" && ih.tree.markedTextRange == 1..<3, "marked text in place: \(im.name) \(String(describing: ih.tree.markedTextRange))")
+        c.expect(iw.textInput != nil, "the input method still has a rectangle")
+        ih.handle(.text("\u{4F60}"))
+        c.expect(im.name == "h\u{4F60}" && ih.tree.markedTextRange == nil, "the confirmed text replaces it: \(im.name)")
+        ih.handle(.markedText("", selectedRange: 0..<0))
+        c.expect(im.name == "h\u{4F60}" && ih.tree.selectedTextRange == 2..<2, "ending with nothing marked changes nothing")
+
+        // Ctrl-V (Cmd-V) pastes from the clipboard the host was given.
+        ih.handle(.keyDown(.character("v"), characters: "\u{16}", modifiers: [.command], isRepeat: false))
+        c.expectEqual(im.name, "h\u{4F60}pasted", "paste from the host's clipboard")
+
+        // Click counts from the window: a double click selects a word, a triple click everything.
+        im.name = "one two"
+        _ = step()
+        let onOne = Point(x: 5, y: 8)
+        ih.handle(.pointerDown(onOne, .primary, clickCount: 2)); ih.handle(.pointerUp(onOne, .primary))
+        c.expectEqual(ih.tree.selectedTextRange, 0..<3, "a double click selects the word")
+        ih.handle(.pointerDown(onOne, .primary, clickCount: 3)); ih.handle(.pointerUp(onOne, .primary))
+        c.expectEqual(ih.tree.selectedTextRange, 0..<7, "a triple click selects everything")
+
+        // The secondary button opens the context menu; its items run with the primary one.
+        guard let row = ih.tree.point(ofText: "Row") else { c.fail("no Row text"); return }
+        ih.handle(.pointerDown(row, .secondary)); ih.handle(.pointerUp(row, .secondary))
+        _ = step()
+        c.expect(ih.tree.elementTree.contains("Menu ("), "a right click opens the context menu:\n\(ih.tree.elementTree)")
+        guard let delete = ih.tree.point(ofText: "Delete") else { c.fail("no Delete item:\n\(ih.tree.elementTree)"); return }
+        ih.handle(.pointerDown(delete, .primary)); ih.handle(.pointerUp(delete, .primary))
+        c.expectEqual(im.log, ["delete"], "a click on its item runs it")
     },
 ]

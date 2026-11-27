@@ -182,10 +182,11 @@ public func sampleTree(_ name: String, root: String, scale: Double = 1) throws -
     case "list": return ViewTree(try sampleList(root: root), environment: e)
     case "library": return ViewTree(try sampleLibrary(root: root), environment: e)
     case "glass": return ViewTree(try sampleGlass(root: root), environment: e)
+    case "components": return ViewTree(try sampleComponents(root: root), environment: e)
     default: return nil
     }
 }
-public let sampleScreenNames = ["albums", "counter", "list", "library", "glass"]
+public let sampleScreenNames = ["albums", "counter", "list", "library", "glass", "components"]
 
 // MARK: Views used by the identity checks
 
@@ -362,7 +363,9 @@ struct EnvRow: View, Equatable {
 /// Equatable and observes a model: runs again when what it read changes.
 struct ObservingRow: View, Equatable {
     let model: EquatableModel
-    nonisolated static func == (a: ObservingRow, b: ObservingRow) -> Bool { a.model === b.model }
+    nonisolated static func == (a: ObservingRow, b: ObservingRow) -> Bool {
+        MainActor.assumeIsolated { a.model === b.model }
+    }
     var body: some View { Text("Other \(model.other)") }
 }
 
@@ -1078,4 +1081,4 @@ struct GridScreen: View {
         try Platform.files.createDirectory(Path.join(c.outputDirectory, "ui"))
         try Platform.files.write(PNG.encode(tree.render(background: .black)), to: Path.join(c.outputDirectory, "ui/grid@2x.png"))
     },
-] + layoutChecks + accessibilityChecks + textInputChecks
+] + layoutChecks + accessibilityChecks + textInputChecks + presentationChecks
