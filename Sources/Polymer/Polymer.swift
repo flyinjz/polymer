@@ -3,3 +3,4 @@
 @_exported import PolymerText
 @_exported import PolymerRender
 @_exported import PolymerUI
+@_exported import PolymerDesign

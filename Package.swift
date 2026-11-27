@@ -31,23 +31,30 @@ let package = Package(
         .target(name: "PolymerGPU", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
         .target(name: "PolymerGPUD3D12", dependencies: ["PolymerBase", "PolymerGPU"]),
 
-        // Views, layout and state.
-        .target(name: "PolymerUI", dependencies: ["PolymerBase", "PolymerText", "PolymerRender"]),
+        // Views, layout and state. PolymerPlatform only for the clipboard interface.
+        .target(name: "PolymerUI", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender"]),
+
+        // The pgr look: theme tokens, house components, commands, Customize, element names.
+        .target(name: "PolymerDesign", dependencies: ["PolymerBase", "PolymerText", "PolymerUI"]),
+
+        // Audio: decoders (WAV, FLAC, MP3), tags and cover art, the resampler and the playback engine.
+        .target(name: "PolymerAudio", dependencies: ["PolymerBase", "PolymerPlatform"]),
 
         // Windows and scenes: a view tree in a platform window, drawn by the GPU.
         .target(name: "PolymerApp", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerRender", "PolymerGPU", "PolymerUI"]),
 
         // `import Polymer`: everything an app uses.
-        .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI"]),
+        .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI", "PolymerDesign"]),
 
         // Checks run by `polymer check`, headless, the same on every OS.
-        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp"]),
+        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio"]),
 
         // The `polymer` command.
         .executableTarget(
             name: "PolymerTools",
             dependencies: [
                 "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerChecks",
+                "PolymerDesign",
                 .target(name: "PolymerGPUD3D12", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),
