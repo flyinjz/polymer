@@ -168,3 +168,38 @@ private func sampleTrack(_ id: String, _ title: String, album: String, artist: S
         c.expectEqual(m.nowPlayingID, first, "previous track")
     },
 ]
+
+@MainActor let i2sThemeChecks: [Check] = [
+    Check("i2s.theme-generator") { c in
+        c.expect(ThemeGenerator.generate(name: "x", colors: [1, 2, 3, 4, 5, 6, 7]) == nil, "7 colours must give nil")
+        c.expectEqual(ThemeGenerator.parseHexList("#ff0000, 00ff00 0x0000FF #abc"), [0xFF0000, 0x00FF00, 0x0000FF])
+        let cols: [UInt32] = [0x101418, 0x1C2128, 0x2A3038, 0x8899AA, 0xC8D0D8, 0xF4F6F8, 0xE0457B, 0x45C4E0]
+        if let t = ThemeGenerator.generate(name: "t", colors: cols) {
+            c.expect(ThemeGenerator.contrast(t.textPrimary, t.bgVoid) >= 11, "text contrast")
+            c.expect(ThemeGenerator.contrast(t.accent, t.bgVoid) >= 3, "accent contrast")
+        } else { c.fail("generate returned nil for 8 colours") }
+    },
+    Check("i2s.themes") { c in
+        let s = CustomTheme.starterThemes
+        c.expectEqual(s.count, 15)
+        c.expectEqual(Set(s.map { $0.id }).count, 15, "unique ids")
+        c.expectEqual(CustomTheme.list(json: CustomTheme.json(s)) ?? [], s, "json round trip")
+        c.expectEqual(Palette.all.count, 15)
+        c.expectEqual(ThemeLibrary.merged([]), s)
+    },
+    Check("i2s.metadata-cleanup") { c in
+        c.expectEqual(MetadataCleanup.featuring("Song  ft Drake", .parentheses), "Song (feat. Drake)")
+        c.expectEqual(MetadataCleanup.featuring("Song [Featuring The Weeknd]", .parentheses), "Song (feat. The Weeknd)")
+        c.expectEqual(MetadataCleanup.removingEditionTags("Heroes (2017 Remaster)"), "Heroes")
+        c.expectEqual(MetadataCleanup.removingEditionTags("Heroes (Live)"), "Heroes (Live)")
+        c.expectEqual(ArtistSpellings.key("Beyoncé"), ArtistSpellings.key("BEYONCE"))
+    },
+    Check("i2s.equalizer") { c in
+        c.expectEqual(EQProfile.builtIns.count, 15)
+        if let p = ParametricEQText.parse("Preamp: -6.2 dB\nFilter 1: ON PK Fc 105 Hz Gain 4.5 dB Q 0.70", name: "x") {
+            c.expectClose(p.preampGain, -6.2, tolerance: 1e-9)
+            c.expectEqual(p.bands.count, 1)
+            c.expectClose(p.bands.first?.frequency ?? 0, 105, tolerance: 1e-9)
+        } else { c.fail("parse failed") }
+    },
+]

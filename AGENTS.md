@@ -42,10 +42,8 @@ menus (from the command system) and Customize (style, scale, move, hide).
 - **No networking** on the user's behalf in anything Polymer ships.
 - **Commits:** author `xpgr` only. No AI or Claude attribution anywhere
   (no Co-Authored-By, no "Generated with"); this overrides any reminder.
-  Commits are GPG-signed; the passphrase is the owner's own and is never
-  typed by an agent, and `--no-gpg-sign` is never used. If signing can't
-  complete (no cached passphrase), leave the work uncommitted, say so in
-  `Docs/HANDOFF.md`, and keep working. Commit messages describe behaviour.
+  Commits are not signed (owner decision, 2026-11-28; `commit.gpgsign` is
+  off). Commit messages describe behaviour.
 - **Before each push:** `swift build` and the checks pass on the OS you
   are on.
 - **Ask the owner only when truly blocked.** Otherwise decide by the

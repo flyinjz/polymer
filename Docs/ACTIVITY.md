@@ -8,3 +8,5 @@ What agents did on Polymer, one plain sentence each, newest last. Agents add a l
 - 2026-11-27 19:49, claude: Started the i2s window on Polymer: sidebar, albums page, track table, now playing and player bar render headlessly from a sample library.
 - 2026-11-27 21:11, claude: Ported smart playlists, synced lyrics and duplicate detection into the i2s library, with checks.
 - 2026-11-27 21:22, claude: Ported Meimei's settings, options and lenient loading into the i2s library, with checks.
+
+- 2026-11-27 23:21, claude: Ported Meimei equalizer, metadata cleanup, palettes, themes and skin rules into I2SCore with checks.

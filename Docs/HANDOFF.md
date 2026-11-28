@@ -1114,3 +1114,7 @@ side) to confirm the luminance rule between the two measured colours.
 - Sample screens: `polymer render albums out.png --scale 2`,
   `polymer render counter out.png --scale 2 --click Add --click Step`,
   `polymer render list out.png --scale 2 --scroll 290 --click "Track 12"`.
+
+## Status (2026-11-28)
+
+EQ, metadata, palettes, theme generator and skin rules are ported into I2SCore with checks. Commit signing is switched off. Branch i2s-port is pushed; main has diverged (31 conflicting files) and waits on the owner choosing the base.
