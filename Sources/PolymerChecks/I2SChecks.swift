@@ -135,6 +135,21 @@ private func sampleTrack(_ id: String, _ title: String, album: String, artist: S
     },
 ]
 
+@MainActor let i2sSettingsChecks: [Check] = [
+    Check("i2s.settings") { c in
+        let s = AppSettingsData.decodeLeniently(from: "{\"density\":\"spacious\",\"spectrumStyle\":\"neon\",\"crossfadeSeconds\":2.5,\"layoutPreset\":\"old\"}")
+        c.expectEqual(s.density, .spacious, "known value kept")
+        c.expectEqual(s.crossfadeSeconds, 2.5, "number kept")
+        c.expectEqual(s.spectrumStyle, AppSettingsData().spectrumStyle, "unknown value falls back")
+        c.expect(AppSettingsData.decodeLeniently(from: "{}") == AppSettingsData(), "empty is defaults")
+        c.expect(AppSettingsData.decodeLeniently(from: "[]") == AppSettingsData(), "not an object is defaults")
+        let again = AppSettingsData.decodeLeniently(from: s.encoded)
+        c.expect(again == s, "round trip")
+        c.expectEqual(AppFontFamily.allCases.count, 10, "font families")
+        c.expectEqual(OnlineSource.allCases.map(\.rawValue), ["appleMusic", "musicBrainz", "deezer"])
+    },
+]
+
 @MainActor let i2sAppChecks: [Check] = [
     Check("i2s.app.model") { c in
         let m = I2SModel(tracks: I2SSample.tracks())
