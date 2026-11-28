@@ -124,6 +124,9 @@ func crop(_ rgba: [UInt8], stride: Int, width: Int, height: Int) -> Bitmap {
         let presented = host.framesPresented
         _ = host.frame(time: t + 1)
         c.expectEqual(host.framesPresented, presented, "an unchanged frame is not presented")
+        let idleBefore = window.frameRequests.load(ordering: .relaxed)
+        host.handle(.pointerMoved(Point(x: 1, y: 1)))
+        c.expectEqual(window.frameRequests.load(ordering: .relaxed), idleBefore, "an idle pointer move does not ask for a frame")
 
         // A new size and scale.
         window.pixelWidth = 450; window.pixelHeight = 375; window.scale = 1.5

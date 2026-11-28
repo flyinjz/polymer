@@ -223,7 +223,7 @@ case "activity":
     }
     activityCommand(root: root, count: flags.contains("--all") ? nil : (count ?? 20), json: json)
 case "demo":
-    do { try demoCommand(positional(1) ?? "glass", software: flags.contains("--software")) } catch { print(error); Platform.process.exit(1) }
+    do { try demoCommand(positional(1) ?? "studio", software: flags.contains("--software")) } catch { print(error); Platform.process.exit(1) }
 case "help", nil:
     Help.show(topic: positional(1), json: json)
 case let other?:
@@ -238,14 +238,28 @@ case let other?:
         print("polymer demo needs a window system; this OS has none yet.")
         Platform.process.exit(1)
     }
-    guard let tree = try namedScreen(name, scale: 1) else {
+    let tree: ViewTree
+    let title: String
+    let width: Double
+    let height: Double
+    if let demo = try demoWindowTree(name, root: ".") {
+        tree = demo.tree
+        title = demo.title
+        width = demo.width
+        height = demo.height
+    } else if let fallback = try namedScreen(name, scale: 1) {
+        _ = fallback.update()
+        tree = fallback
+        title = "Polymer: \(name)"
+        width = max(320, fallback.size.width)
+        height = max(240, fallback.size.height)
+    } else {
         print("No screen \"\(name)\". Screens: \(screenNames.joined(separator: ", ")).")
         Platform.process.exit(2)
     }
-    _ = tree.update()
-    let window = try windows.makeWindow(title: "Polymer: \(name)", width: max(320, tree.size.width), height: max(240, tree.size.height))
+    let window = try windows.makeWindow(title: title, width: width, height: height)
     let backend = try GPU.makeBackend(software ? .software : .automatic)
-    let host = try WindowHost(tree: tree, window: window, backend: backend, background: Color(white: 0.063),
+    let host = try WindowHost(tree: tree, window: window, backend: backend, background: Color(white: 0.055),
                               clipboard: Platform.clipboard)
     print("\(backend.name), \(window.pixelWidth)x\(window.pixelHeight) pixels at scale \(window.scale). Close the window to quit.")
     window.show()

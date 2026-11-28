@@ -70,7 +70,7 @@ public struct PRowLabel: View {
     public init(title: String, detail: String? = nil) { self.title = title; self.detail = detail }
     public var body: some View {
         HStack(spacing: theme.space.s) {
-            Text(title).textStyle(.body, theme.gray.text, theme: theme)
+            Text(title).textStyle(.body, theme.gray.text, theme: theme).lineLimit(1)
             Spacer(minLength: theme.space.s)
             if let detail { Text(detail).textStyle(.mono, theme.gray.secondaryText, theme: theme) }
         }

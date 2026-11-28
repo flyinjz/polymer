@@ -12,6 +12,7 @@
     {"title": "Tools for agents", "detail": "polymer render, describe, diff, bench (release layout+record p50 0.03 ms, software raster p50 8.68 ms), --customize, check, check-tools, status, log, activity, help."}
   ],
   "inProgress": [
+    {"title": "Moving Meimei onto Polymer", "detail": "A new I2SCore module holds the track and album model and reads and writes the same library file as Meimei, with checks. Next: reading the real library file, then the Albums page."},
     {"title": "Design system", "detail": "The pgr look as ready-made parts wired to theme tokens (PanelLook/TextInputLook, live PScrollBar, CommandRegistry unmount cleanup, CustomizeModel width/height persistence). Light-mode Material presets still need owner sign-off."},
     {"title": "Audio engine", "detail": "Pure-Swift WAV, FLAC, MP3, AIFF/AIFC, ALAC/M4A with tags/cover art/ReplayGain, 64-bit DSP (EQ, BS.1770 loudness, true peak, limiter, crossfader, crossfeed, dither), and gapless playback. WASAPI output still needs live-speaker verification."},
     {"title": "Windows integration", "detail": "Screen readers in real windows, wiring PointerStyle to Win32 cursor shapes, and keyboard context menu hook in Win32Window."}

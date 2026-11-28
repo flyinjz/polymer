@@ -70,10 +70,12 @@ public final class WindowHost: WindowDelegate {
             // Ending with nothing marked changes nothing (no undo step, the selection stays).
             if !s.isEmpty || tree.markedTextRange != nil { _ = tree.setMarkedText(s, selectedRange: selected) }
             syncTextInput()
-        case .resized(let w, let h, let s): resize(width: w, height: h, scale: s)
+        case .resized(let w, let h, let s):
+            resize(width: w, height: h, scale: s)
+            window.setNeedsFrame()
         case .closeRequested: window.close()
         }
-        window.setNeedsFrame()
+        if tree.needsUpdate || tree.isAnimating { window.setNeedsFrame() }
     }
 
     private func resize(width: Int, height: Int, scale: Double) {
@@ -83,7 +85,6 @@ public final class WindowHost: WindowDelegate {
     }
 
     public func frame(time: Double) -> Bool {
-        presenter.waitForFrame()
         tree.time = clock?() ?? time
         do {
             let (list, damage) = record()
@@ -98,6 +99,10 @@ public final class WindowHost: WindowDelegate {
                 presented = [PixelRect(x: 0, y: 0, width: w, height: h)]
             }
             if !regions.isEmpty {
+                // Only wait on the swap chain's frame-latency semaphore when we are actually
+                // going to call `present`: consuming the waitable object without a matching
+                // `Present1` leaves the semaphore at zero and stalls the next frame for 1 s.
+                presenter.waitForFrame()
                 try renderer.draw(list, into: target!, regions: regions, background: background)
                 try presenter.present(target!, damage: presented)
                 framesPresented += 1

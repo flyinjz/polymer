@@ -497,6 +497,7 @@ public final class Win32Window: PlatformWindow {
             if updateSize() {
                 delegate?.handle(.resized(width: pixelWidth, height: pixelHeight, scale: scale))
                 // Windows runs its own loop while the user drags the edge: draw now.
+                _ = needsFrame.exchange(false, ordering: .acquiringAndReleasing)
                 drawFrame(time: system.now)
             }
             return 0

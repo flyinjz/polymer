@@ -40,6 +40,10 @@ let package = Package(
         // Audio: decoders (WAV, FLAC, MP3), tags and cover art, the resampler and the playback engine.
         .target(name: "PolymerAudio", dependencies: ["PolymerBase", "PolymerPlatform"]),
 
+        // i2s shared model: tracks, albums and the library file format, ported from Meimei Core. Standard library only.
+        .target(name: "I2SCore", dependencies: ["PolymerBase"]),
+        .target(name: "I2S", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerDesign", "I2SCore"]),
+
         // Windows and scenes: a view tree in a platform window, drawn by the GPU.
         .target(name: "PolymerApp", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerRender", "PolymerGPU", "PolymerUI"]),
 
@@ -47,13 +51,13 @@ let package = Package(
         .target(name: "Polymer", dependencies: ["PolymerBase", "PolymerText", "PolymerRender", "PolymerUI", "PolymerDesign"]),
 
         // Checks run by `polymer check`, headless, the same on every OS.
-        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio"]),
+        .target(name: "PolymerChecks", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio", "I2SCore", "I2S"]),
 
         // The `polymer` command.
         .executableTarget(
             name: "PolymerTools",
             dependencies: [
-                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerChecks",
+                "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU", "PolymerUI", "PolymerApp", "PolymerChecks", "I2S",
                 "PolymerDesign",
                 .target(name: "PolymerGPUD3D12", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),

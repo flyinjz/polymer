@@ -102,7 +102,6 @@ look as clean as on a Mac, on every screen (section 4).
 | D7 | Audio output | Native per OS: CoreAudio (exclusive and integer when bit-perfect), WASAPI exclusive and shared. |
 | D8 | Decoders | Ours: FLAC, WAV, AIFF, ALAC, MP3 (patents expired), later Vorbis. AAC through each OS's decoder (licensing stays with the OS). Opus through libopus until ours exists. |
 | D9 | Linux | Later; the platform interfaces stay ready for it. |
-| D10 | The Windows Qt app | Frozen now, replaced by Polymer. |
 | D11 | Accessibility and IME | In the architecture from day one (accessibility tree, text input protocol); full screen-reader and IME support finished later. |
 | D12 | Effects and materials | **Ours**, rendered by Polymer's own compositor on every OS: backdrop blur, materials and liquid glass (refraction, frost, rim light) as first-class effects (section 11). The OS supplies only what lies behind the window (DWM / NSVisualEffectView). |
 
@@ -225,7 +224,7 @@ so every element has one by default.
 
 - On the Mac, Polymer draws inside a normal view, so pages move one at a
   time while the SwiftUI app keeps working. Albums first.
-- On Windows, Polymer replaces the Qt app.
+- On Windows, Polymer is the app.
 - `Core/` moves to Polymer's base and becomes `I2SCore`.
 
 No milestones: work follows what the rest depends on, and everything stays

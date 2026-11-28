@@ -174,7 +174,7 @@ func zoomCommand(_ a: [String]) throws {
 }
 
 /// Every screen the command knows: the sample screens, then the command's own.
-@MainActor var screenNames: [String] { sampleScreenNames + toolScreenNames }
+@MainActor var screenNames: [String] { sampleScreenNames + toolScreenNames + demoScreenNames }
 
 /// A screen by name as a live tree, or nil when there is none. `customize`
 /// gives the design showcase screen the customizations to draw with; the
@@ -186,6 +186,7 @@ func namedScreen(_ name: String, scale: Double, customize: CustomizeModel? = nil
         e.displayScale = scale
         return ViewTree(try sampleComponents(root: ".", customize: customize), environment: e)
     }
+    if let t = try demoScreenTree(name, root: ".", scale: scale, initialWidth: 1280, initialHeight: 820, customize: customize) { return t }
     if let t = try toolScreenTree(name, root: ".", scale: scale) { return t }
     return try sampleTree(name, root: ".", scale: scale)
 }

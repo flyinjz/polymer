@@ -2,6 +2,20 @@
 
 Current state of the work. Every session updates this before it ends.
 
+## Meimei port (2026-11-27, session 8)
+
+- Meimei is `C:\Users\pgr\meimei` (shared `Core/`, Mac `macOS/`, Mac screenshots in `Reference/`).
+- New module **`I2SCore`** (standard library only, depends on `PolymerBase`): `Track`, `AlbumGroup`, natural string order
+  (replaces `localizedStandardCompare`), clock/sample-rate formatting. `Track.init?(json:)` / `.json` read and write the
+  same keys as Meimei's `library.json`. Also `Library.swift`: `LibraryRow`, `LibrarySource`, `Playlist` (smart rules kept as raw JSON), `LibraryRules`, `LibraryFile`, `TrackSort`. Checks: `i2s.*` in `PolymerChecks/I2SChecks.swift` (6 pass).
+- Decisions: `id` stays the UUID string (no `UUID` without Foundation); dates are seconds since 2001-01-01 (what
+  `JSONEncoder` writes), so existing files load unchanged. `Track` is a plain struct (Meimei's copy-on-write box is a
+  Mac-side optimisation; revisit if library scans show copying cost).
+- **`I2S` app target** (`Sources/I2S`): `I2SModel` (@Observable) + `I2SSample` (generated library; the owner's real library is never read) + `I2SViews` (sidebar, top bar, Albums hero/grid, track table, now playing, lyrics, player bar, status bar). `polymer render i2s out.png` draws it; `Docs/shots/i2s.png` is the latest. Look is a first pass, not yet matched to `Meimei/Reference/main-albums.png` (corner brackets, artwork, Playlists/Profile pages missing): design-visible, owner sign-off.
+- Next: port `Options`/`SettingsData`, `Persistence` (via `Platform.files` + `JSON`), smart playlist rules, lyrics, EQ; hook `PolymerAudio` for playback and route `WindowHost` keys to `CommandRegistry`; remaining pages (Artists detail, Playlists, Profile). Defer ListenLog/ProfileStats crypto.
+- **Not committed**: GPG signing timed out (no cached passphrase). I2SCore work is staged; commit it signed when the key is unlocked.
+- Uncommitted from before this session: WindowHost, WindowChecks, Win32Window, ImageCommands, main.swift, DemoScreens.
+
 ## State (2026-11-26, Windows session 7)
 
 - **Committed & signed on `main`** (GPG key `8FDBF5E546CF3D68` unlocked on this PC). No push until the owner says so.

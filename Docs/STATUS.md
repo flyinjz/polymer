@@ -17,6 +17,7 @@ This page is made from `Docs/status.json` by `polymer status --write`; change th
 
 ## In progress
 
+- **Moving Meimei onto Polymer**: A new I2SCore module holds the track and album model and reads and writes the same library file as Meimei, with checks. Next: reading the real library file, then the Albums page.
 - **Design system**: The pgr look as ready-made parts wired to theme tokens (PanelLook/TextInputLook, live PScrollBar, CommandRegistry unmount cleanup, CustomizeModel width/height persistence). Light-mode Material presets still need owner sign-off.
 - **Audio engine**: Pure-Swift WAV, FLAC, MP3, AIFF/AIFC, ALAC/M4A with tags/cover art/ReplayGain, 64-bit DSP (EQ, BS.1770 loudness, true peak, limiter, crossfader, crossfeed, dither), and gapless playback. WASAPI output still needs live-speaker verification.
 - **Windows integration**: Screen readers in real windows, wiring PointerStyle to Win32 cursor shapes, and keyboard context menu hook in Win32Window.
