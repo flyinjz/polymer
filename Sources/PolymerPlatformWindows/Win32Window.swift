@@ -552,8 +552,9 @@ private enum Win32WindowHost {
 
 private let polymerWin32WndProc: WNDPROC = { hwnd, uMsg, wParam, lParam in
     guard let hwnd else { return 0 }
+    let bits = Int(bitPattern: hwnd)
     return MainActor.assumeIsolated {
-        Win32WindowHost.handleMessage(hwnd: hwnd, uMsg: uMsg, wParam: wParam, lParam: lParam)
+        Win32WindowHost.handleMessage(hwnd: HWND(bitPattern: bits)!, uMsg: uMsg, wParam: wParam, lParam: lParam)
     }
 }
 #endif

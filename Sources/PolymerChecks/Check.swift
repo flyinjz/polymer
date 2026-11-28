@@ -68,6 +68,7 @@ public enum Checks {
             + appAndDesignChecks + appRuntimeAndControlsChecks
             + audioAndGPUChecks + audioEngineChecks + emojiAndMetadataChecks
             + platformAndGPUShaderChecks
+            + i2sChecks + i2sLibraryChecks + i2sRulesChecks + i2sSettingsChecks + i2sThemeChecks + i2sAppChecks
     }
 
     /// Runs the checks whose name contains `filter`; returns the number that failed.

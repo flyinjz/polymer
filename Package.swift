@@ -43,6 +43,10 @@ let package = Package(
         // 64-bit float real-time audio engine, lock-free SPSC queues, decoders, and DSP.
         .target(name: "PolymerAudio", dependencies: ["PolymerBase"]),
 
+        // i2s: shared model ported from Meimei Core (standard library plus PolymerBase), and its UI.
+        .target(name: "I2SCore", dependencies: ["PolymerBase"]),
+        .target(name: "I2S", dependencies: ["PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerUI", "PolymerDesign", "PolymerApp", "I2SCore"]),
+
         // `import Polymer`: everything an app uses.
         .target(name: "Polymer", dependencies: [
             "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
@@ -52,7 +56,7 @@ let package = Package(
         // Checks run by `polymer check`, headless, the same on every OS.
         .target(name: "PolymerChecks", dependencies: [
             "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
-            "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio",
+            "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio", "I2SCore", "I2S",
         ]),
 
         // The `polymer` command.
@@ -60,7 +64,7 @@ let package = Package(
             name: "PolymerTools",
             dependencies: [
                 "PolymerBase", "PolymerPlatform", "PolymerText", "PolymerRender", "PolymerGPU",
-                "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio", "PolymerChecks",
+                "PolymerUI", "PolymerApp", "PolymerDesign", "PolymerAudio", "PolymerChecks", "I2S",
                 .target(name: "PolymerPlatformWindows", condition: .when(platforms: [.windows])),
                 .target(name: "PolymerPlatformMac", condition: .when(platforms: [.macOS])),
                 .target(name: "PolymerPlatformLinux", condition: .when(platforms: [.linux])),

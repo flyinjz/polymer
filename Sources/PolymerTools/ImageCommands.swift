@@ -7,9 +7,10 @@ import PolymerUI
 import PolymerApp
 import PolymerDesign
 import PolymerChecks
+import I2S
 
 @MainActor
-let toolScreenNames = sampleScreenNames + ["design"]
+let toolScreenNames = sampleScreenNames + ["design", "i2s"]
 
 /// `polymer zoom <in.png> <out.png> x y width height factor`: crop and enlarge (nearest neighbour), for inspecting pixels.
 func zoomCommand(_ a: [String]) throws {
@@ -129,6 +130,8 @@ func screenTree(_ name: String, scale: Double, steps: [(option: String, value: S
     let tree: ViewTree
     if name == "design" {
         tree = try buildDesignScreen(root: ".", scale: scale)
+    } else if name == "i2s" {
+        tree = try buildI2SScreen(root: ".", scale: scale)
     } else if let sample = try sampleTree(name, root: ".", scale: scale) {
         tree = sample
     } else {
@@ -191,4 +194,13 @@ func screenTree(_ name: String, scale: Double, steps: [(option: String, value: S
     }
     tree.update()
     return tree
+}
+
+@MainActor
+private func buildI2SScreen(root: String, scale: Double) throws -> ViewTree {
+    let font = try TextReference.font(root: root, "GeistMono-Regular.otf")
+    let model = I2SModel(tracks: I2SSample.tracks())
+    var env = EnvironmentValues()
+    env.displayScale = scale
+    return ViewTree(i2sRootView(model: model, sans: font, mono: font), environment: env)
 }

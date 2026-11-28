@@ -48,3 +48,10 @@ Design: `Docs/DESIGN.md`. SwiftUI deltas: `Docs/DIFFERENCES.md`.
 - **Standard library only:** Zero `Foundation` anywhere; `#if os(...)` and OS imports live only inside `PolymerPlatform*` / future GPU & audio backends and `Platform.install` in `PolymerTools/main.swift`.
 - **Real-time audio:** Zero allocations, zero locks, and zero I/O on `SPSCRingBuffer` read/write, `AudioGraph.render`, `AudioNode.process`, and `GaplessPlaybackEngine.renderOutput`.
 - **Drawing & damage:** `ViewTree.render()` applies `ScrollBlit`s in-place and redraws only `damage` rects (bit-identical to full draws, including under analytical `clipPaths`); `DisplayListCompiler` + `SoftwareGPURasterizer` verify GPU batch parity against CPU `Canvas`.
+
+## i2s on main (integration)
+
+- The i2s port (I2SCore, I2S, i2s checks, `polymer render i2s`) now sits on top of origin/main. The earlier unsigned line is kept on branch `i2s-port`.
+- I2SViews is rewritten against PolymerDesign's Theme tokens. Known gaps: player bar buttons wrap their labels, position slider is fixed width (no GeometryReader), no context menus yet (needs CommandRegistry), Customize ids exist on main regions.
+- Fixed main's Win32Window wndproc sending error.
+- Next: context menus, table headers/sorting, settings file IO, playback via PlaybackEngine, remaining windows (see the port list in the i2s-port HANDOFF).
